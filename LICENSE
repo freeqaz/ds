@@ -204,9 +204,9 @@
 
    DREAM SERPENT SCOPE NOTE (not part of the Apache-2.0 license text)
 
-   This Apache-2.0 grant (D25, docs/08-business-model-and-packaging.md §1)
-   covers exactly the paths listed in oss-manifest.yaml at the repository
-   root — the open data plane (D15) and the other OSS trees. It does NOT
-   cover paid/ (see paid/LICENSE, proprietary) or assurance/load-rig/
-   (in-repo, excluded from OSS publication per D51). oss-manifest.yaml is
-   the authoritative, machine-readable statement of this license's scope.
+   This Apache-2.0 grant (D25) covers every tracked path in this public
+   repository. oss-manifest.yaml at the repository root is the
+   authoritative, machine-readable statement of this license's scope.
+   Development happens in a larger private tree whose proprietary
+   components (e.g. paid/, referenced in some design prose here) are not
+   part of this publication and are not covered by this grant.
