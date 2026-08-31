@@ -1,0 +1,124 @@
+// dreamserpent.auth.v1 — Token attenuation contract (D126, D129; doc 23 §5/§9).
+//
+// STATUS: OPEN — not yet frozen. Freeze PR ships bodies + baselines + generated
+// fakes in one atomic commit per proto/FREEZE.md and doc 14 §7.
+//
+// TokenAttenuationService is consumed exclusively by the orchestrator fan-out
+// path (D18). Every agent VM receives exactly one sub-token per session.
+syntax = "proto3";
+
+package dreamserpent.auth.v1;
+
+import "dreamserpent/boundary/v1/session_ref.proto";
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/auth/v1;authv1";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TokenAttenuationService — sub-token derivation at D18 fan-out (D126).
+//
+// Caller: orchestrator fan-out handler only.
+// The calling token MUST carry v1:identity:mint scope (D127 / OQ4).
+//
+// SYNC semantics: DeriveAgentToken < 20ms (Biscuit attenuation is offline).
+// ─────────────────────────────────────────────────────────────────────────────
+service TokenAttenuationService {
+  // DeriveAgentToken produces one attenuated sub-token for a specific agent VM.
+  // Attenuation rules (D126):
+  //   - scopes ⊆ parent scopes (monotonicity — can only narrow)
+  //   - aud replaced with agent host_session_index
+  //   - exp ≤ parent exp
+  //   - ds_parent_jti set to parent jti (revocation lineage chain)
+  rpc DeriveAgentToken(DeriveAgentTokenRequest) returns (DeriveAgentTokenResponse);
+
+  // ListDerivedTokens returns all live sub-tokens derived from a parent user
+  // auth token. Used by the revocation sweep and the audit trail.
+  rpc ListDerivedTokens(ListDerivedTokensRequest) returns (ListDerivedTokensResponse);
+}
+
+// ─── DeriveAgentToken ────────────────────────────────────────────────────────
+
+message DeriveAgentTokenRequest {
+  // The parent user auth token (D125 JWT) to attenuate from.
+  string parent_user_auth_token = 1;
+
+  // The session this agent VM belongs to.
+  dreamserpent.boundary.v1.SessionRef session_ref = 2;
+
+  // The index of this specific agent VM within the session (0-based).
+  // Becomes the aud of the derived sub-token.
+  int32 host_session_index = 3;
+
+  // Requested scopes for this agent. Must be a subset of the parent's scopes.
+  // The service enforces monotonicity and returns INVALID_ARGUMENT if the
+  // caller requests a scope the parent token does not carry.
+  repeated string requested_scopes = 4;
+
+  // Optional override for sub-token lifetime (seconds from now).
+  // Must be ≤ parent token remaining lifetime. Defaults to parent remaining.
+  int32 lifetime_seconds = 5;
+
+  // Reserved for token-lineage block (D104 pattern).
+  reserved 16, 17, 18, 19;
+}
+
+message DeriveAgentTokenResponse {
+  // The derived sub-token (Biscuit primary, D98).
+  // Injected into the agent VM at mount time; never returned over the network
+  // to an agent after initial injection.
+  bytes agent_token = 1;
+
+  // The jti of the derived sub-token (for audit and revocation sweep).
+  string derived_jti = 2;
+
+  // Expiry as a UNIX timestamp.
+  int64 expires_at_unix = 3;
+
+  // Scopes actually granted (may be narrower than requested if parent scope
+  // was narrower than requested — should not happen if caller is correct, but
+  // authoritative value is this field not the request).
+  repeated string granted_scopes = 4;
+
+  // Reserved for token-lineage block (D104 pattern).
+  reserved 16, 17, 18, 19;
+}
+
+// ─── ListDerivedTokens ───────────────────────────────────────────────────────
+
+message ListDerivedTokensRequest {
+  // jti of the parent user auth token.
+  string parent_jti = 1;
+
+  // If true, include already-revoked or expired sub-tokens (for audit trail).
+  bool include_expired = 2;
+
+  // Reserved for token-lineage block (D104 pattern).
+  reserved 16, 17, 18, 19;
+}
+
+message ListDerivedTokensResponse {
+  repeated DerivedTokenRecord tokens = 1;
+
+  // Reserved for token-lineage block (D104 pattern).
+  reserved 16, 17, 18, 19;
+}
+
+message DerivedTokenRecord {
+  string derived_jti = 1;
+  dreamserpent.boundary.v1.SessionRef session_ref = 2;
+  int32 host_session_index = 3;
+  repeated string scopes = 4;
+  int64 issued_at_unix = 5;
+  int64 expires_at_unix = 6;
+
+  DerivedTokenStatus status = 7;
+
+  // Reserved for token-lineage block (D104 pattern).
+  reserved 16, 17, 18, 19;
+}
+
+enum DerivedTokenStatus {
+  DERIVED_TOKEN_STATUS_UNSPECIFIED = 0;
+  DERIVED_TOKEN_STATUS_ACTIVE = 1;
+  DERIVED_TOKEN_STATUS_EXPIRED = 2;
+  DERIVED_TOKEN_STATUS_REVOKED = 3;
+}

@@ -1,0 +1,1 @@
+{"ds_fixture":{"provenance":"synthetic","seam":"guardrail-conformance/nftgate dns-rebinding-fails (doc 06 §3c; DNS-4 dual-stack scrub)","created":"2026-06-13","note":"hand-authored rebinding case via an IPv4-mapped IPv6 answer (::ffff:10.0.0.5); DNS-4 rule 2 checks the embedded v4 against the v4 rules before admission; never a live resolution (D50)."}}

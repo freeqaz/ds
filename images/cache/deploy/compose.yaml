@@ -1,0 +1,40 @@
+# compose.yaml — podman-compose / docker-compose equivalent of nexus.container.
+#
+# Provided for hosts that do not run the systemd-quadlet path. Identical
+# desired state: stock Nexus Repository CE (D41 buy-not-build), same ports,
+# same persistent blob store, same read-only provisioning mount. Pick ONE
+# deploy path per host (quadlet OR compose), never both.
+#
+#   podman-compose -f images/cache/deploy/compose.yaml up -d
+#   # then, once the status endpoint is green:
+#   images/cache/deploy/bootstrap.sh
+#
+# Ports/paths are kept identical to nexus.container and to ../wiring/* so the
+# golden-image client config resolves to the same endpoints regardless of which
+# deploy path a site chooses.
+
+services:
+  ds-cache-nexus:
+    # Digest-pinned (tag@sha256, see images/README.md) — identical to nexus.container.
+    image: docker.io/sonatype/nexus3:3.70.1@sha256:00ecf29c4a3a43d677aec9ff07966e942c4356d9c16a275d94110f6e1e5aca94
+    container_name: ds-cache-nexus
+    restart: on-failure
+    ports:
+      - "8081:8081"   # Nexus core + npm/PyPI/Go HTTP repository endpoints
+      - "5000:5000"   # OCI/Docker pull-through connector
+    environment:
+      # Heap sizing per Sonatype's single-host CE guidance.
+      INSTALL4J_ADD_VM_PARAMS: "-Xms2703m -Xmx2703m -XX:MaxDirectMemorySize=2703m"
+      TZ: "UTC"
+    volumes:
+      - ds-cache-nexus-data:/nexus-data
+      # Config-as-code, mounted read-only; applied by bootstrap.sh.
+      - ./:/opt/ds-cache/provision:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/service/rest/v1/status || exit 1"]
+      start_period: 120s
+      interval: 30s
+      retries: 5
+
+volumes:
+  ds-cache-nexus-data:

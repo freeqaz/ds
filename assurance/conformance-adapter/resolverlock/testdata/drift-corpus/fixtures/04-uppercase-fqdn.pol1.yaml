@@ -1,0 +1,17 @@
+# drift class: a blocklist entry domain carries uppercase bytes.
+# named edge shape: uppercase FQDN (D74 normalize-to-lowercase).
+# expected verdict (go, rust) = (reject, accept)
+# Go: ErrBadFQDN — resolver-lock entries are stored lowercase (the form the
+#     egress gateway folds the peeked SNI into before the policy query, doc 13
+#     §1.1); a mixed-case shipped entry would silently miss on the TLS-1 match.
+# Rust: parse_layer stores the domain verbatim and does not case-fold or reject;
+#     the Rust suite's case-normalization test asserts the live behavior. The Go
+#     offline half is the parse-time tripwire here. Complementary coverage.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+blocklist:
+  - domain: DNS.Example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

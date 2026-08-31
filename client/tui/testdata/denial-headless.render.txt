@@ -1,0 +1,9 @@
+::session attached  model=claude-sonnet-4-6  runtime=2.1.173  perm=default  cwd=/work  tools=[Bash]
+--state -> WORKING (requesting)
+$ tool Bash  {"command":"echo seed \u0026\u0026 cat /work/.memory/notes.txt \u003e /work/scratch/out.txt","description":"seed scratch output"}
+= tool denied: The following parts of your command require approval: writing to /work/scratch/out.txt. Re-run with the operation pre-approved to proceed.
+> assistant: The redirect needs approval, so I did not write the file.
+% quota none ok (provisional)
+==session success turns=2 dur=3900ms denials=1 reason=completed
+--state -> ATTACHED (turn_complete)
+[ session 000000000004 | state ATTACHED | success | seq 8 ]

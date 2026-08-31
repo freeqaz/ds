@@ -1,0 +1,18 @@
+# drift class: a baseline-pack family is declared with no `tier:` value.
+# named edge shape: empty enabled-family.
+# expected verdict (go, rust) = (accept, reject)
+# Rust: BadValue — the family node has no `tier:` key, so Tier::parse("") rejects
+#     the empty tier token.
+# Go: the resolver-lock scanner does not read families; the blocklist extracts
+#     cleanly. Complementary coverage (Rust-side schema tripwire).
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+baseline_pack:
+  families:
+    core:
+blocklist:
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

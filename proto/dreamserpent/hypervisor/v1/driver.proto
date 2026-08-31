@@ -1,0 +1,377 @@
+// HypervisorDriver v1 — the seam between the host agent and whatever runs VMs
+// (doc 15 §5.1).
+//
+// The contract leaks ZERO QEMU/libvirt specifics, so the D30 re-evaluation seam
+// (Cloud Hypervisor at M3) and the D29 ZFS/dm-thin alternatives stay clean
+// substrate swaps behind it. v0 driver = libvirt inside the virtual-metal hosts
+// (orchestrator/internal/hypervisor/libvirt/); the EC2 demo driver is the same
+// contract over the AWS API and the first capability-flag honesty test
+// (D31/D32/D35). Every verb is idempotent on session_uuid.
+//
+// M0 freeze package (FREEZE.md `dreamserpent.hypervisor.v1` row): the bodies
+// here, the baseline descriptor set, and the FREEZE.md flip land together; a
+// message or field missed at this one-shot freeze is a v2-package event, not a
+// patch (proto/FREEZE.md change control). The package imports — never redefines
+// — `attach.v1.AttachHandle`/`SessionState` and `boundary.v1.Provenance`, so it
+// freezes as one wave with or AFTER attach.v1, never ahead of it
+// (check-freeze-riders.sh CHECK 5b; attach.v1 is FROZEN).
+syntax = "proto3";
+
+package dreamserpent.hypervisor.v1;
+
+// AttachHandle (D79) is owned by dreamserpent.attach.v1 (doc 15 §5.4, §6.1
+// row 8) and imported — never redefined — by IssueAttachHandle below. SessionState
+// is the §3 state vocabulary, also attach.v1-owned (doc 15 §3, §6.1 row 3), and
+// is the observed-state element of ObservedSession.
+import "dreamserpent/attach/v1/attach_handle.proto";
+import "dreamserpent/attach/v1/events.proto";
+
+// PermissionPosture is the agent-runtime permission disposition (doc 13 §2),
+// owned by dreamserpent.runtime.v1 (entrypoint_config.proto) — imported here,
+// NEVER re-declared (the same shared-vocabulary discipline this package follows
+// for attach.v1.SessionState and boundary.v1.Provenance). runtime.v1 is FROZEN
+// (FREEZE.md row 21) and imports only boundary.v1 — no cycle. Carried on
+// VmSpec.posture below as the additive per-session posture the control plane
+// forwards to the host driver.
+import "dreamserpent/runtime/v1/entrypoint_config.proto";
+
+// Provenance is the POL-3 verdict provenance struct (rule id / policy layer /
+// policy version) — owned by dreamserpent.boundary.v1 (boundary.v1 log1.proto;
+// doc 14 §2, doc 13 §5), imported here, never re-declared (the same shared-struct
+// discipline boundary.v1's SuspendSignal follows). REQUIRED on a POLICY_BREACH
+// suspend (SuspendRequest below).
+import "dreamserpent/boundary/v1/log1.proto";
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/hypervisor/v1;hypervisorv1";
+
+// HypervisorDriverService is the host-agent-to-VM-runtime seam (doc 15 §5.1).
+// The doc 15 §5.1 sketch names it `HypervisorDriver`; it is rendered here with
+// the proto house-style `Service` suffix (buf STANDARD), the seam identity (the
+// D35 driver contract) unchanged — the same rendering identity.v1 records for its
+// `IdentityValidation` -> `IdentityValidationService`. The host agent drives this;
+// the driver implementation (libvirt v0, EC2 demo) lives in
+// orchestrator/internal/hypervisor/ bounded by the honest capability flags plus
+// the conformance suite (doc 15 §10) — no driver internals leak through this
+// contract. Every verb is idempotent on `session_uuid` so a retried call after a
+// host or control-plane blip re-adopts rather than duplicates.
+//
+// Each RPC takes a `<Verb>Request` and returns a `<Verb>Response` per buf
+// STANDARD (RPC_REQUEST_RESPONSE_UNIQUE); a returned shared/imported message
+// (Capabilities, the attach.v1 handle, the streamed delta chunk) is WRAPPED in
+// the per-RPC response, the boundary.v1 WatchPoliciesResponse / canvas.v1
+// board-API precedent — so a stream/response can grow optional fields post-freeze
+// without a v2.
+service HypervisorDriverService {
+  // GetCapabilities reports the D35 Nomad-style flags at registration; the EC2
+  // demo driver is the first honesty test (it answers false on all three).
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
+
+  // CloneFromImage materializes a VM from a content-addressed image and returns
+  // the host-side attachment binding (index / tap / guest IP / overlay) the
+  // tap-create RACI row cites (doc 15 §5.1, TODOs).
+  rpc CloneFromImage(CloneFromImageRequest) returns (CloneFromImageResponse);
+
+  // IssueAttachHandle returns the D79 transport-ambivalent handle a client uses
+  // to attach (doc 15 §5.4); the handle message is attach.v1-owned, wrapped here.
+  rpc IssueAttachHandle(IssueAttachHandleRequest) returns (IssueAttachHandleResponse);
+
+  // Snapshot captures session state (D29 overlay = the durability unit).
+  rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
+
+  // Suspend pauses a session; the reason taxonomy is D77-narrowed and
+  // POLICY_BREACH REQUIRES provenance (SuspendRequest below).
+  rpc Suspend(SuspendRequest) returns (SuspendResponse);
+
+  // Resume restarts a suspended session.
+  rpc Resume(ResumeRequest) returns (ResumeResponse);
+
+  // Destroy drives the doc 15 §4.2 teardown ordering.
+  rpc Destroy(DestroyRequest) returns (DestroyResponse);
+
+  // Migrate moves a session between hosts; capability-gated (Capabilities
+  // .supports_migrate), internals free until M3.
+  rpc Migrate(MigrateRequest) returns (MigrateResponse);
+
+  // ExportDiskDelta streams the D29 qcow2-overlay delta; capability-gated
+  // (Capabilities.supports_disk_delta_export).
+  rpc ExportDiskDelta(ExportDiskDeltaRequest) returns (stream ExportDiskDeltaResponse);
+
+  // RecoverSessions re-adopts the sessions a host was running after a host-agent
+  // or driver restart (restart re-adoption; D66 never-recycled indices).
+  rpc RecoverSessions(RecoverSessionsRequest) returns (RecoverSessionsResponse);
+}
+
+// GetCapabilitiesRequest opens the capability query. Empty at M0 — capabilities
+// are host/driver-global, not per-session; reserved as a distinct message (not
+// google.protobuf.Empty) so it can grow optional fields post-freeze without a v2.
+message GetCapabilitiesRequest {}
+
+// Capabilities are the D35 Nomad-style flags reported at registration. The EC2
+// demo driver is the first honesty test: it answers false on all three
+// (AMI/instance launch behind CloneFromImage; Suspend/Resume best-effort via
+// stop/start with no transparency claim; no disk-delta export) — D32. The
+// scheduler reads these to gate Migrate / instant-clone / delta-export paths.
+message Capabilities {
+  bool supports_migrate = 1;             // EC2 demo: false
+  bool supports_instant_clone = 2;       // EC2 demo: false (AMI/instance launch behind CloneFromImage)
+  bool supports_disk_delta_export = 3;   // EC2 demo: false
+}
+
+// GetCapabilitiesResponse wraps the reported Capabilities (the buf-STANDARD
+// per-RPC response, doc 15 §5.1). Wrapping keeps the registration reply additive
+// (it can grow optional fields post-freeze without a v2).
+message GetCapabilitiesResponse {
+  Capabilities capabilities = 1;
+}
+
+// VmSpec is the content-addressed VM request; every HypervisorDriver verb is
+// idempotent on `session_uuid` (doc 15 §5.1).
+message VmSpec {
+  string session_uuid = 1;
+
+  // Content-addressed image identity: (repo, ref, env-spec hash) -> image ID
+  // (doc 15 §9). doc 18 OQ3 freeze-gate WAIVED (D107): NO role-layer field is
+  // added to this seam — role layers join the content-addressed image ID the
+  // Image & cache builder owns (the `(repo, ref, env-spec hash, role-layer-set
+  // hash)` direction), so this string carries the role layers and VmSpec is
+  // unchanged. The field name/number/type are unaltered — D107 is a comment-
+  // recorded waiver, not a contract change; the composition (HOW the role-layer
+  // set folds into the address) stays open with the Image & cache builder
+  // (doc 18 OQ3), the canonicalizer shared with the §"OQ3" content_hash.
+  string image_id = 2;
+
+  // D37 cgroup-v2 resource floors (vcpu floor/burst, memory.low/balloon,
+  // io.weight/io.max). The scheduler's floors-fit math (HostCapacity, §5.2)
+  // keys off these.
+  ResourceFloors floors = 3;
+
+  // D38 — opaque reference to the VM entrypoint config; the orchestrator stays
+  // runtime-IGNORANT (the env-spec schema itself is UNOWNED, doc 15 OQ10). The
+  // runtime seam is the attach event schema + this reference, not a runtime
+  // type leaked here.
+  string entrypoint_config_ref = 4;
+
+  // CA bundle / token references for the §4.1 step-7 injection (token ref rides
+  // the D22 shim). NEVER the long-lived credential itself — those never enter
+  // the VM (D39).
+  SessionMaterial material = 5;
+
+  // The OPTIONAL per-session permission posture (runtime.v1.PermissionPosture,
+  // doc 13 §2): the additive carrier that threads the orchestrator-resolved
+  // per-session posture from the control plane THROUGH this host-driver seam to
+  // the gap-1 EntrypointConfig producer (libvirt create.go reads spec.GetPosture()
+  // into its CreateRequest.Posture). UNSPECIFIED = 0 (the zero value / no posture
+  // supplied) falls back to the daemon-pinned EntrypointFacts.Posture (the M0
+  // default-deny LOCKED pin); a CONCRETE value WINS. ADDITIVE per-session carrier
+  // (the next free field after material = 5): an unset value decodes UNSPECIFIED,
+  // byte-identical to the pre-rider wire, so the no-posture create path is
+  // unchanged. Distinct from the D107 role-layer waiver above (that waiver keeps
+  // role LAYERS off this seam via the content-addressed image_id; this is the
+  // runtime PERMISSION posture, a different axis — doc 13 §2 enum vs the role-doc
+  // string posture).
+  dreamserpent.runtime.v1.PermissionPosture posture = 6;
+}
+
+// ResourceFloors are the D37 cgroup-v2 floors and burst ceilings (doc 15 §5.1).
+// VALUES are rig-tuned (the strawman is 2 vCPU / 4 GB floor, 8 vCPU / 8 GB
+// burst, D37) — never frozen here; the SHAPE freezes at M0.
+message ResourceFloors {
+  uint32 vcpu_floor = 1;            // cpu.weight-equivalent floor (D37)
+  uint32 vcpu_burst = 2;           // burst ceiling
+  uint64 memory_low_bytes = 3;     // memory.low (D37)
+  uint64 memory_balloon_bytes = 4; // balloon target
+  uint32 io_weight = 5;            // io.weight (D37)
+  uint64 io_max_bps = 6;           // io.max bandwidth ceiling
+}
+
+// SessionMaterial references the per-session CA bundle and token the §4.1 step-7
+// injection installs (doc 15 §5.1). Both are REFERENCES (opaque handles the host
+// agent resolves at injection time), never the material itself — the long-lived
+// credentials never enter the VM (D22/D39); the token ref is resolved through the
+// D22 shim.
+message SessionMaterial {
+  string ca_bundle_ref = 1;        // per-session CA bundle reference (D17/D22)
+  string session_token_ref = 2;    // per-session base-token reference, resolved via the D22 shim
+}
+
+// CloneFromImageRequest carries the VmSpec to materialize (doc 15 §5.1).
+message CloneFromImageRequest {
+  VmSpec spec = 1;
+}
+
+// CloneFromImageResponse is the host-side attachment binding — the artifact the
+// open tap-create RACI row cites (doc 15 §5.1, TODOs). Returned once the clone is
+// placed and the per-session attachment primitive is up.
+message CloneFromImageResponse {
+  // Host-local index the orchestrator allocates and NEVER recycles within the
+  // flow-log retention window (D66) — the per-host join key.
+  uint64 host_session_index = 1;
+
+  // `dstap-<idx>`, <=15 chars / IFNAMSIZ (D66) — the never-recycled tap name
+  // that is simultaneously the NFT-2 iifname match, NFT-5 ct-mark key, and LOG-2
+  // attribution key (doc 14 §4).
+  string tap_name = 2;
+
+  // Family-agnostic address bytes + family enum, NEVER fixed32 (D75). The
+  // orchestrator never assumes IPv4.
+  GuestAddress guest_ip = 3;
+
+  // qcow2 overlay path = the D29 delta store + inspectable artifact + durability
+  // unit.
+  string overlay_path = 4;
+}
+
+// AddressFamily tags GuestAddress so the address stays family-agnostic (D75:
+// never fixed32). Both families are admitted from day one.
+enum AddressFamily {
+  ADDRESS_FAMILY_UNSPECIFIED = 0;
+  ADDRESS_FAMILY_IPV4 = 1;
+  ADDRESS_FAMILY_IPV6 = 2;
+}
+
+// GuestAddress is the D75 family-agnostic address: raw bytes (4 for v4, 16 for
+// v6) plus the family enum. Pins the D75 address discipline the boundary.v1 and
+// attach.v1 packages also follow (never fixed32 / never IPv4-assumed).
+message GuestAddress {
+  AddressFamily family = 1;
+  bytes address = 2;               // 4 bytes (IPV4) or 16 bytes (IPV6)
+}
+
+// IssueAttachHandleRequest names the session to mint an attach handle for
+// (doc 15 §5.4). The handle itself is attach.v1-owned (returned wrapped below).
+message IssueAttachHandleRequest {
+  string session_uuid = 1;
+
+  // The subscriber class to mint the handle for (D61 one-writer/N-reader);
+  // attach.v1.Role is WRITER | READER. Arbitration is ultimately server-side at
+  // the WatchSession terminator (orchestrator.v1 §5.3); this requests the seat
+  // class the handle grants.
+  dreamserpent.attach.v1.Role role = 2;
+}
+
+// IssueAttachHandleResponse wraps the attach.v1-owned handle (the buf-STANDARD
+// per-RPC response, doc 15 §5.4). The handle message stays attach.v1-owned and
+// imported; this wrapper is the hypervisor seam's reply envelope.
+message IssueAttachHandleResponse {
+  dreamserpent.attach.v1.AttachHandle handle = 1;
+}
+
+// SnapshotRequest captures a session (doc 15 §5.1). Idempotent on session_uuid.
+message SnapshotRequest {
+  string session_uuid = 1;
+  string label = 2;                // optional caller-chosen snapshot label
+}
+
+// SnapshotResponse returns the durable overlay reference of the snapshot (D29).
+message SnapshotResponse {
+  string snapshot_ref = 1;         // overlay/delta reference (D29 durability unit)
+}
+
+// SuspendReason is the §3 SUSPENDED(reason) enum, D77-narrowed (doc 15 §3,
+// §5.1). USER | POLICY_BREACH | REBALANCE; POLICY_BREACH is valid ONLY for the
+// D77 genuine-threat classes (blocklist hit | rule action:suspend) and REQUIRES
+// provenance on the SuspendRequest. This is the AUTHORITATIVE reason the driver
+// acts on; attach.v1.SuspendReason is the read-only §3 projection of it.
+enum SuspendReason {
+  SUSPEND_REASON_UNSPECIFIED = 0;
+  SUSPEND_REASON_USER = 1;
+  SUSPEND_REASON_POLICY_BREACH = 2;  // D77 genuine-threat classes only; provenance REQUIRED
+  SUSPEND_REASON_REBALANCE = 3;
+}
+
+// SuspendRequest pauses a session with a D77-narrowed reason (doc 15 §5.1).
+// Idempotent on session_uuid: the orchestrator collapses retransmits of the same
+// triggering event so one threat does not drive repeated Suspend calls (the
+// boundary.v1 SuspendSignal carries the dedup key upstream).
+message SuspendRequest {
+  string session_uuid = 1;
+  SuspendReason reason = 2;
+
+  // POL-3 provenance (matched rule id / policy layer / policy version) — the
+  // boundary.v1-owned struct, imported. REQUIRED when reason == POLICY_BREACH
+  // (which is valid only for D77 genuine-threat classes); UNSET for USER /
+  // REBALANCE. The one-line "why was this suspended?" answer (doc 15 §4.3).
+  dreamserpent.boundary.v1.Provenance provenance = 3;
+}
+
+// SuspendResponse acknowledges the suspend (doc 15 §5.1). Reserved as a distinct
+// message so the path can grow optional fields post-freeze without a v2.
+message SuspendResponse {}
+
+// ResumeRequest restarts a suspended session (doc 15 §5.1). Idempotent.
+message ResumeRequest {
+  string session_uuid = 1;
+}
+
+// ResumeResponse acknowledges the resume.
+message ResumeResponse {}
+
+// DestroyRequest tears a session down, driving the doc 15 §4.2 ordering
+// (doc 15 §5.1). Idempotent: a retried Destroy on an already-gone session
+// succeeds.
+message DestroyRequest {
+  string session_uuid = 1;
+}
+
+// DestroyResponse acknowledges the teardown.
+message DestroyResponse {}
+
+// MigrateRequest moves a session to another host (doc 15 §5.1). Capability-gated
+// on Capabilities.supports_migrate; the migration internals are free until M3.
+message MigrateRequest {
+  string session_uuid = 1;
+  string target_host_id = 2;
+}
+
+// MigrateResponse carries the post-migration attachment binding the target host
+// allocated (a fresh per-host index/tap on the new host — per-host index history
+// is the migration/park re-placement join, doc 15 §5.6).
+message MigrateResponse {
+  CloneFromImageResponse target_binding = 1;
+}
+
+// ExportDiskDeltaRequest opens the D29 overlay-delta export stream
+// (doc 15 §5.1). Capability-gated on Capabilities.supports_disk_delta_export.
+message ExportDiskDeltaRequest {
+  string session_uuid = 1;
+  string since_snapshot_ref = 2;   // optional base; empty => full overlay
+}
+
+// ExportDiskDeltaResponse is one streamed frame of the qcow2 overlay delta (D29)
+// — the buf-STANDARD per-RPC stream-response name. Chunk size is an
+// implementation detail (rig-tuned); `offset` orders the stream.
+message ExportDiskDeltaResponse {
+  uint64 offset = 1;
+  bytes data = 2;
+}
+
+// RecoverSessionsRequest asks the driver to enumerate the sessions it is still
+// running after a restart (doc 15 §5.1) — restart re-adoption.
+message RecoverSessionsRequest {
+  string host_id = 1;
+}
+
+// RecoverSessionsResponse returns the observed sessions the driver re-adopted
+// (doc 15 §5.1). ObservedSession is shared with the hostagent.v1 heartbeat's
+// `observed` element (§5.2) — the reconciler's input.
+message RecoverSessionsResponse {
+  repeated ObservedSession sessions = 1;
+}
+
+// ObservedSession is one re-adopted / heartbeat-observed session (doc 15 §5.1,
+// §5.2). It is the SHARED observed-state element: RecoverSessionsResponse here and
+// the hostagent.v1 Heartbeat.observed repeated field both carry it, so the
+// reconciler reads one shape across restart re-adoption and steady-state
+// heartbeat.
+message ObservedSession {
+  string session_uuid = 1;
+  string domain_uuid = 2;                 // the hypervisor-local domain/instance id
+  uint64 host_session_index = 3;          // never-recycled per-host index (D66)
+  string tap_name = 4;                    // dstap-<idx> (D66)
+  string overlay_path = 5;                // D29 overlay
+
+  // The observed §3 state — vocabulary = the §3 machine incl. PARKED + D77
+  // SUSPENDED(reason). attach.v1.SessionState is the single §3 vocabulary source
+  // (doc 15 §3, §6.1 row 3), imported here, never re-declared.
+  dreamserpent.attach.v1.SessionState observed_state = 6;
+}

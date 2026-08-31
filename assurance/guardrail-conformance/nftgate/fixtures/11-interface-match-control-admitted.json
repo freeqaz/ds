@@ -1,0 +1,8 @@
+{
+  "row": "interface-match-not-source-ip",
+  "kind": "spoofed-in-vm-source-addr",
+  "dst_ip": "203.0.113.10",
+  "src_spoofed": true,
+  "want": "allow",
+  "why": "interface-match control: even with a forged in-VM source, a connect to an admitted DESTINATION (203.0.113.10, admitted for api.allowed.example) is allowed — admission is by destination, unaffected by the forge; proves NFT-2 gates on the interface, not the source, and is not a blanket block (doc 06 §3c interface-match; NFT-2)"
+}

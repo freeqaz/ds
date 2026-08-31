@@ -1,0 +1,72 @@
+# Seed mirrored-advisory test spec — RUSTSEC-2026-0118 (hickory NSEC3 infinite loop).
+#
+# SPEC/FIXTURE ONLY. The ds-dnsgate crate this wires into does not exist yet; this is a
+# ready-to-wire descriptor for the ds-dnsgate regression corpus (doc 11 §6 obligation 8).
+# No D-number is minted here.
+
+advisory: RUSTSEC-2026-0118
+summary: >-
+  NSEC3 validation can be driven into an unbounded (infinite) loop by a crafted
+  authoritative response, hanging the resolver thread.
+affected:
+  crate: hickory-dns
+  pin: "0.26.x"
+  subscription: hickory-dns          # subscriptions.yaml id
+class: resource-exhaustion / NSEC3-validation-loop
+
+# The structured input the reproduction feeds the resolver. Fixture SHAPE, not raw bytes —
+# the concrete fixture is synthetic and lands with the corpus (D50: a fixture in git is synthetic).
+input_shape:
+  transport: [udp, tcp]              # re-run over TCP for §3.4 TCP parity (doc 11 §6 obligation 6)
+  query:
+    qname: "nonexistent.example-zone.test."
+    qtype: A
+    dnssec_ok: true                  # DO bit set — exercises the NSEC3 denial-of-existence path
+  upstream_response:
+    rcode: NOERROR
+    authority_records:
+      # A crafted NSEC3 chain whose hash linkage never terminates the closest-encloser walk.
+      kind: NSEC3
+      property: "iteration/linkage that forms a cycle with no terminating owner name"
+    note: >-
+      the reproduction is a synthetic authoritative response that, pre-fix, drives the
+      NSEC3 closest-encloser proof into an unbounded walk
+
+# What the PATCHED resolver must do — the assertion.
+expected_behavior:
+  - "validation terminates in bounded work — no thread hang, no unbounded CPU"
+  - "the crafted chain is rejected as bogus, not validated"
+  - "no answer carrying the unproven name reaches the VM (insert-then-answer fail-closed, W1)"
+
+# The wire-observable verdict the conformance suite checks (driven via dig / stub clients,
+# never a hickory API — doc 11 §6 obligation 10).
+expected_verdict:
+  rcode: SERVFAIL                    # genuine-failure rcode for a validation failure (§3.2, not a policy verdict)
+  within_ms: 500                     # bounded — no hang (the denial-conformance <500ms class, §6 obligation 3)
+  residue: none                      # zero residue: no map entry, no nft set element left behind (W1)
+
+suite_destination: [a, c]
+suite_destination_detail:
+  a: "ds-dnsgate (a) parsing/validation regression — the reproduction the pinned resolver must survive"
+  c: >-
+    (c) guardrail-assurance — asserts the advertised property: no single crafted response can
+    hang the fleet's only resolver (availability)
+
+corpus_target:
+  name: "ds-dnsgate regression corpus"
+  status: landed                     # the ds-dnsgate crate landed; the reproduction is wired (see mirrored_test)
+  obligation: "doc 11 §6 obligation 8 + obligation 10 (wire-driven, not API-driven)"
+
+# Back-link to the landed wire-driven reproduction (the corpus is no longer
+# destination-less). The test is a stub client over the wire against a listening gate
+# instance — never a hickory API — per doc 11 §6 obligation 10; the NSEC3-loop shape
+# and the bounded-time/SERVFAIL verdict above are the spec it enforces.
+mirrored_test:
+  - file: "dataplane/services/ds-dnsgate/tests/framework_validation.rs"
+    test: "rustsec_2026_0118_nsec3_loop_bounded"
+    asserts: "DO-bit query terminates in bounded work (no hang); no unproven name reaches the VM (W1)"
+
+citation:
+  - "doc 14 §9 hickory-dns row: 'RUSTSEC-2026-0118 (NSEC3 loop) ... seed the regression corpus'"
+  - "doc 11 §6 obligation 8: 'RUSTSEC-2026-0118 (NSEC3 loop) ... reproductions run against the pinned hickory'"
+  - "doc 11 §7: hickory is the fleet's only resolver — an unpatched parsing/encoding-DoS window is a fleet availability incident"

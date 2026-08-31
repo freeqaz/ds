@@ -1,0 +1,28 @@
+# vm/test-guest/ — artifact ignore list.
+#
+# The committed artifact of this tree is the REPRODUCIBLE BUILDER + scripts +
+# tests + docs — NEVER the image/seed blobs. All blobs live under
+# $TG_ARTIFACT_DIR (~/tmp/ds-test-guest, btrfs/CoW), never in the repo. These
+# globs are belt-and-suspenders in case anyone runs the builder with the output
+# pointed at this directory: nothing image-shaped is ever committable.
+#
+# NEVER commit (per the wave hard rule: no blobs/images, no file >1MB):
+*.qcow2
+*.qcow2.*
+*.img
+*.iso
+*.raw
+vmlinuz*
+initramfs*
+initrd*
+*.kernel
+*.cpio
+*.cpio.gz
+*.sha256
+*.sha512
+*.asc
+
+# Local artifact / seed-staging dirs if ever created under this tree.
+artifacts/
+seed-inputs-*/
+seed-*/

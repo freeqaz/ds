@@ -1,0 +1,136 @@
+// Dream Serpent — boundary.v1 policy snapshot + stream messages.
+//
+// One of the three non-LOG-1 Stage-0 boundary->orchestrator seams
+// (doc 14 §2b; counterparty ledger doc 15 §6). Owner = Boundary;
+// counterparty = Orchestrator (doc 15 §6); freeze deadline = Stage 0;
+// change control = buf-gated, additive-only post-freeze (the same regime
+// as the §2 LOG-1 checklist). The composed policy document reaches the
+// three host consumers over this stream; the orchestrator serves it.
+//
+// Distribution topology (D72): EXACTLY ONE WatchPolicies(from_seq)
+// subscriber per host — the D35 host agent. ds-dnsgate, ds-tlsproxy, and
+// the NFTables programmer NEVER open this control-plane stream; they
+// consume only the host-local snapshot fan-out. The D36 policy_log
+// bigserial seq is THE single policy version end to end — no per-service
+// or per-resource-type version namespaces (doc 13 §1 rule 3).
+//
+// Versioning is directory-shaped (proto/README.md): a breaking change
+// mints a sibling v2/ package; additions post-freeze are optional fields
+// with reserved numbers planned ahead.
+syntax = "proto3";
+
+package dreamserpent.boundary.v1;
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/boundary/v1;boundaryv1";
+
+// NOTE: these policy-stream messages carry no SessionRef — a snapshot is
+// HOST-WIDE, not per-session (D72; doc 13 §5) — so log1.proto is NOT
+// imported here (an unused import is a STANDARD lint failure). The
+// shared SessionRef (session_uuid, host_id, host_session_index, tap_name;
+// D66/D44) is defined ONCE in log1.proto and is imported by the seams
+// that need it (ask.proto, suspend.proto), never redefined (doc 14 §2/§4).
+
+// PolicySnapshot — the composed-document snapshot the host subscriber
+// receives and fans out host-locally (doc 13 §5 "Snapshot identity").
+//
+// Snapshot identity is the tuple (seq, content_hash, full composed policy
+// document); consumers ACK (seq, content_hash) via AckPolicyRequest. Any
+// hash/schema failure NACKs and aborts the apply HOST-WIDE (the host
+// stays on vN) — there is deliberately no per-consumer partial apply.
+//
+// Composition is DENY-WINS / layered (doc 13 §1 rule 2, D36/D72): layers
+// compose system-baseline -> org -> repo/session, and blocklists ALWAYS
+// win. The composed document — not any single layer — is what `document`
+// carries; consumers never receive raw layers to compose themselves
+// (the one-evaluator rule, doc 13 §1 rule 1: policy-core is the only
+// policy brain; no consumer reimplements composition). The deny-wins
+// composed output is precisely what survives into this snapshot.
+message PolicySnapshot {
+  // The D36 policy_log bigserial seq — THE single monotonic policy
+  // version, end to end (D72; doc 13 §1 rule 3). Monotonic per host
+  // stream; the WatchPolicies(from_seq) replay cursor (see the RPC doc).
+  uint64 seq = 1;
+
+  // SHA-256 over the produce-once serialized composed document; the host
+  // subscriber serializes the document exactly once and hashes those
+  // exact bytes, the Rust consumers hash the TRANSPORTED bytes, compare,
+  // NACK host-wide on mismatch, then parse — no consumer re-serializes
+  // (the produce-once / verify-only anti-drift rule, doc 13 §5.1, a
+  // PROPOSED canonical-serialization spec pending the freeze PR;
+  // referenced here as proposed only, not advanced).
+  bytes content_hash = 2;
+
+  // The full composed policy document, deny-wins composed (doc 13 §1
+  // rule 2). The on-wire encoding of the document body itself is free
+  // implementation behind this opaque payload — the frozen contract is
+  // the (seq, content_hash, document) identity, not the document's
+  // internal schema (POL-1 v0 lives in ds-contracts / the policy-schema
+  // skeleton, doc 13 §3, never in this proto package).
+  bytes document = 3;
+}
+
+// AckPolicyRequest — the consumer acknowledgement. Carries ONLY (seq,
+// content_hash); applied-seq reporting to the control plane rides the
+// host-agent heartbeat (D72; doc 13 §5 "Readiness", applied_seq =
+// min(seq) over the three consumers AFTER sweep completion), NOT this
+// message. A hash mismatch is signalled by NOT acking (NACK = abort the
+// apply host-wide); there is no separate nack field — absence of an ack
+// for `seq` is the negative.
+message AckPolicyRequest {
+  // The seq being acknowledged — echoes PolicySnapshot.seq.
+  uint64 seq = 1;
+
+  // The content_hash the consumer verified against the transported bytes
+  // — echoes PolicySnapshot.content_hash. The ack proves the consumer
+  // saw and verified exactly this snapshot before flipping to it.
+  bytes content_hash = 2;
+}
+
+// WatchPoliciesRequest — opens the per-host server-streaming subscription
+// and carries the replay cursor.
+message WatchPoliciesRequest {
+  // Replay from this seq (exclusive of already-applied state): on
+  // (re)subscribe the host agent passes its last persisted applied seq so
+  // the stream catches up from there (D36 catch-up; D72 one-subscriber-
+  // per-host). from_seq = 0 requests the current snapshot from the start.
+  uint64 from_seq = 1;
+}
+
+// WatchPoliciesResponse — the server-streaming frame: one composed
+// snapshot per message (the STANDARD-named wrapper for the WatchPolicies
+// stream). Wrapping the snapshot in a per-method response keeps the seam
+// additive-extensible (stream-level fields can grow post-freeze without a
+// v2; proto/README "reserved RPCs/fields exist now so additions never
+// force a v2").
+message WatchPoliciesResponse {
+  // The composed snapshot for this stream frame (seq, content_hash,
+  // document) — D36/D72.
+  PolicySnapshot snapshot = 1;
+}
+
+// AckPolicyResponse — empty acknowledgement envelope for AckPolicy.
+// Reserved as a distinct message (not google.protobuf.Empty) so the ack
+// path can grow optional fields post-freeze without a v2 (proto/README
+// "reserved RPCs/fields exist now so additions never force a v2").
+message AckPolicyResponse {}
+
+// PolicyStreamService — the boundary->orchestrator policy distribution
+// seam.
+//
+// WatchPolicies is server-streaming: the orchestrator (the D36 policy_log
+// fan-out) streams the composed snapshot to the ONE per-host subscriber
+// (D72), replaying from `from_seq`. AckPolicy carries the consumer ACK
+// back. Apply is two-phase prepare/commit with admitter-last order and a
+// mandatory revocation sweep (D72; doc 13 §5 "Apply barrier" /
+// "Revocation sweep") — that sequencing is consumer-side behavior the
+// host agent drives, not extra RPCs on this seam.
+service PolicyStreamService {
+  // Server-streaming replay of composed snapshots from `from_seq`
+  // (D36/D72). Exactly one stream per host (the D35 host agent).
+  rpc WatchPolicies(WatchPoliciesRequest) returns (stream WatchPoliciesResponse);
+
+  // The consumer acknowledgement (seq, content_hash). NACK is the
+  // absence of an ack — a hash/schema failure aborts the apply host-wide
+  // (doc 13 §5 "Snapshot identity").
+  rpc AckPolicy(AckPolicyRequest) returns (AckPolicyResponse);
+}

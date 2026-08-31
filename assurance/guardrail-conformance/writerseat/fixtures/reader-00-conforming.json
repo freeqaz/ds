@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthetic CONFORMING write-leg participant set for the D137 no-inject re-green (sessions/10 §5 claim 4; the 01KTWJ64M0 barrier). A ROLE_WRITER who was granted the seat reaches DriveSession and stdin (the legitimate write path), plus two ROLE_READER spectators who reached NO WriterRelayService RPC and whose input reached NO stdin. The check must pass (zero violations): with the v2 write path present, a no-grant reader provably cannot reach the WriterRelay RPCs or stdin.",
+  "participants": [
+    { "name": "granted-driver", "role": "ROLE_WRITER", "reached_writer_relay_surfaces": ["DriveSession"], "input_reached_stdin": true },
+    { "name": "spectator-alice", "role": "ROLE_READER", "reached_writer_relay_surfaces": [], "input_reached_stdin": false },
+    { "name": "spectator-bob", "role": "ROLE_READER", "reached_writer_relay_surfaces": [], "input_reached_stdin": false }
+  ]
+}

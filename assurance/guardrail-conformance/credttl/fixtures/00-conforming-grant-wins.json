@@ -1,0 +1,5 @@
+{
+  "_comment": "Synthetic CONFORMING inject-class presentation, grant-wins-the-min: a validation fence of now=1700000000 with BOTH horizons fresh — the token far-future (1700003600, +3600s) and the grant nearer-future but still fresh (1700000600, +600s). The check must pass (zero violations); the earned ALLOW horizon is the TIGHTER grant horizon 1700000600 — the grant wins the min (doc 16 §5.1, doc 19 §8).",
+  "policy": { "now_unix": 1700000000 },
+  "presentation": { "token_ttl_unix": 1700003600, "grant_ttl_unix": 1700000600 }
+}

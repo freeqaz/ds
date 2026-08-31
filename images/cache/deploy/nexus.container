@@ -1,0 +1,98 @@
+# nexus.container — Podman Quadlet unit for the site-local pull-through cache.
+#
+# D41: registry caching is BUY-not-build. This runs the off-the-shelf Nexus
+# Repository CE image unchanged — we deploy and wire it, we do not implement
+# registry protocol. Zero registry-protocol code lives anywhere in this repo.
+#
+# Install: copy to /etc/containers/systemd/ on the cache host, then
+#   systemctl daemon-reload && systemctl start nexus
+# Quadlet generates a nexus.service unit at daemon-reload time. Rootful podman
+# is assumed (the cache host is infrastructure, not a session VM); for a
+# rootless deploy move this file to ~/.config/containers/systemd/ and swap the
+# [Install] WantedBy target to default.target only (the multi-user.target wants
+# below is a system-instance hook). No User=/Group= overrides are set here —
+# the container runs as podman's default for whichever instance loads it.
+#
+# This is one site-local host. The cache is reached by session VMs through the
+# default-deny egress boundary (ds-tlsproxy / ds-dnsgate, D63) like any other
+# allowed endpoint; the cache itself terminates upstream TLS to the public
+# registries it proxies. The cache implements NO registry semantics (D41) — it
+# is a stock Nexus instance.
+
+[Unit]
+Description=Dream Serpent site-local pull-through cache (Nexus Repository CE, D41)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+# Digest-pinned (tag@sha256, see images/README.md): the tag stays human-readable,
+# the digest binds — the cache host cannot silently roll this image.
+# Sonatype publishes Nexus CE under the community LTS line.
+Image=docker.io/sonatype/nexus3:3.70.1@sha256:00ecf29c4a3a43d677aec9ff07966e942c4356d9c16a275d94110f6e1e5aca94
+ContainerName=ds-cache-nexus
+
+# Nexus core + HTTP repository endpoints (npm, PyPI, Go proxy) all ride :8081.
+# The OCI/Docker pull-through proxy gets its own connector port :5000
+# (declared as a Docker proxy repo in repos.yaml / provisioned by bootstrap).
+PublishPort=8081:8081
+PublishPort=5000:5000
+
+# Additional OCI upstreams, DISABLED BY DEFAULT (no golden image pulls from them
+# yet, so the connectors stay defined-but-unopened).  Each is one connector per
+# upstream — one mirror endpoint fronts exactly one upstream (see repos.yaml).
+# To enable an upstream, uncomment ALL FOUR of: the PublishPort below, the
+# matching proxy entry in deploy/repos.yaml, its create_proxy call in
+# deploy/bootstrap.sh, and its stanza in ../wiring/registries.conf.  Once the
+# registries.conf stanza is uncommented, lint-image-drift.sh fails closed unless
+# all four encodings of that upstream's connector port agree.
+#
+# The `ds-oci-connector:` marker line is the lint's anchor for the PublishPort
+# that belongs to each upstream (the Nexus repo name, matching repos.yaml
+# `name:` and the bootstrap.sh create_proxy).  Keep marker and PublishPort
+# adjacent; dropping the PublishPort is a structural failure (rc=2), and a
+# one-sided port edit on either side of the pair is a drift failure (rc=1).
+#
+# When you enable an upstream, uncomment ONLY its `PublishPort=` line and LEAVE
+# THE `ds-oci-connector:` MARKER COMMENTED.  The marker is a lint anchor, not a
+# quadlet key: it uses `key: value`, not systemd's `Key=Value`, so an
+# uncommented marker makes the unit parser log `Missing '=', ignoring line`
+# (harmless — the unit still loads — but noise in an otherwise clean journal).
+# The lint reads the marker and the PublishPort whether either is commented or
+# live, so leaving the marker commented costs the guard nothing.
+#
+# ds-oci-connector: ghcr-proxy
+# PublishPort=5001:5001
+#
+# ds-oci-connector: quay-proxy
+# PublishPort=5002:5002
+
+# Persistent blob + metadata store. Survives image rolls; this is the cache.
+Volume=ds-cache-nexus-data:/nexus-data:Z
+
+# Config-as-code: the declarative repo manifest (repos.yaml) + bootstrap.sh are
+# mounted read-only for reference inside the container; the desired state is
+# applied by bootstrap.sh from the host against the Nexus REST API. Keeping the
+# manifest in git (not in the data volume) keeps desired state reviewable.
+# Deploy this directory to the documented host path below before daemon-reload:
+#   install -d /opt/ds-cache && cp -r images/cache/deploy /opt/ds-cache/provision
+Volume=/opt/ds-cache/provision:/opt/ds-cache/provision:ro,Z
+
+# Nexus wants a generous heap and a stable timezone for blob housekeeping.
+Environment=INSTALL4J_ADD_VM_PARAMS=-Xms2703m -Xmx2703m -XX:MaxDirectMemorySize=2703m
+Environment=TZ=UTC
+
+# Cap egress identity: the cache is the only component that holds upstream
+# registry reachability; session VMs never talk to a public registry directly.
+HealthCmd=/bin/sh -c "curl -fsS http://localhost:8081/service/rest/v1/status || exit 1"
+HealthStartPeriod=120s
+HealthInterval=30s
+HealthRetries=5
+
+[Service]
+# Nexus is a long boot; give systemd room before it considers start failed.
+TimeoutStartSec=300
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target default.target

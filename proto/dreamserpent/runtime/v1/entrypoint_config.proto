@@ -1,0 +1,326 @@
+// EntrypointConfig — the host-agent → guest VM entrypoint contract (D38, the D20
+// runtime seam; doc 15 §4.1 step 8, §5.4). The STRUCTURED launch surface the host
+// agent resolves and hands the guest at boot, plus an OPAQUE role-axis runtime
+// overlay the orchestrator NEVER inspects.
+//
+// Package home: dreamserpent.runtime.v1 (FREEZE.md `dreamserpent.runtime.v1` row).
+// This is the SECOND of the two D38 runtime seams (the first is the attach event
+// schema, dreamserpent.attach.v1). It is a SEPARATE package, NOT folded into the
+// frozen attach.v1 (the design Part-4-res.-8 fold option is declined — OQ-B): the
+// boot-config surface and the event-stream surface are owned by different seams
+// (host agent → guest here; wrapper → consumer there) and their lifecycles do not
+// share a version namespace.
+//
+// RUNTIME IGNORANCE IS THE POINT (D20/D38; doc 16 §12 — no mechanism may depend on
+// adapter cooperation). The orchestrator passes an opaque entrypoint-config ref in
+// VmSpec and never learns runtime internals; the host agent resolves that ref into
+// THIS structured message at boot. The structured fields below are the launch
+// surface the HOST AGENT (not the orchestrator) resolves and acts on; the
+// role-axis runtime overlay rides as opaque bytes (`role_overlay_ref`), keeping
+// consistency with roles.v1's `RoleRuntime.entrypoint_config_overlay_ref` opaque
+// contract (doc 18 §2 axis (e); D38/D20) — neither the orchestrator nor this
+// contract inspects it.
+//
+// THE one-shot freeze (proto/FREEZE.md; doc 14 §2 change control): a message or
+// field missed at this M0 flip is a v2-package event, NOT a patch. The freeze
+// covers the message SHAPE ONLY — delivery encoding (how the host agent transports
+// this message into the guest: a virtio-vsock frame, a config blob in the overlay,
+// an env injection) stays FREE (OQ-C). So every field the doc 15 §4.1 step-8 boot
+// surface names is present, and every message carries a GENEROUS `reserved` tail
+// for additive growth (D18/M3 fan-out, D74 endpoint-pack growth) — there is NO v2.
+//
+// WHAT MUST NOT LIVE HERE (this package's README; doc 16 §1 non-goals):
+//   - per-runtime adapter behavior — Claude Code specifics live ONLY in
+//     client/wrapper/adapters/claude-code/ (D20/D38/D49); a new runtime is a new
+//     adapter against the SAME structured surface + opaque overlay, never a proto
+//     edit;
+//   - the wrapper → consumer event schema — that is dreamserpent.attach.v1;
+//   - CREDENTIAL MATERIAL OF ANY KIND (D17/D39/D8): the egress wiring carries a
+//     `ca_bundle_path` REFERENCE and proxy endpoint settings only — never a key,
+//     cert, PEM body, bearer token, or session-token VALUE. The session token is
+//     fetched by the guest from the host-local D22 shim at boot; this config names
+//     WHERE to reach it, never the token itself.
+
+syntax = "proto3";
+
+package dreamserpent.runtime.v1;
+
+// SessionRef is the SHARED session join quartet (D66/D44), the CANONICAL definition
+// in dreamserpent.boundary.v1 — imported, NEVER re-declared here (the Stage-0
+// session-ref unification, doc 14 §2/§4). The guest reports back through
+// EntrypointService (entrypoint.proto) against this same reference, so the host
+// agent joins the report to the session record by the one authoritative key.
+import "dreamserpent/boundary/v1/session_ref.proto";
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/runtime/v1;runtimev1";
+
+// PermissionPosture is the agent-runtime permission disposition the host agent
+// hands the guest at boot (doc 15 §4.1 step 8; doc 13 §2 posture vocabulary). It is
+// the runtime-FACING projection of the session's network/permission posture — NOT
+// the POL-1 policy document itself (that is enforced agent-unreachably at the
+// boundary, doc 16 §1; the runtime cannot grant itself more than the boundary
+// admits). A compromised runtime that ignores this posture changes nothing the
+// boundary enforces — the posture is an INPUT to the runtime, never a guardrail.
+enum PermissionPosture {
+  // The proto3 zero value (buf-STANDARD _UNSPECIFIED zero). A resolved config MUST
+  // set a concrete posture; UNSPECIFIED means the field was never set, never a wire
+  // default for "locked".
+  PERMISSION_POSTURE_UNSPECIFIED = 0;
+  // Locked: the runtime starts with the narrowest permission surface (no
+  // auto-approve; every tool/network action is gated). Maps to doc 13 §2 `locked`.
+  PERMISSION_POSTURE_LOCKED = 1;
+  // Standard: the org-default permission surface. Maps to doc 13 §2 `standard`.
+  PERMISSION_POSTURE_STANDARD = 2;
+  // Open: the broadest permission surface the org admits. Maps to doc 13 §2 `open`.
+  // NEVER wider than the boundary admits — the boundary is the authority (D42).
+  PERMISSION_POSTURE_OPEN = 3;
+
+  // Reserved for forward posture growth (a finer runtime permission vocabulary).
+  // A new posture is an additive enum value, never a v2.
+  reserved 4 to 15;
+}
+
+// StdioDisposition selects how the host agent wires the runtime process's stdio
+// at launch (the additive serpent-CLI terminal-MVP launch-mode rider; docs/
+// serpent-cli-mvp/10-build-decisions §A3 res. 3/7, 01-pty-transport.md). It is a
+// generic, runtime-IGNORANT exec disposition — NOT a Claude-Code specific (the
+// adapter under client/wrapper/adapters/claude-code/ does not depend on it). The
+// proto3 zero value is UNSPECIFIED and MUST be byte-identical to today's behavior
+// (pipes): an unset field changes nothing, so every already-resolved M0
+// EntrypointConfig keeps its current pipes wiring with no migration.
+enum StdioDisposition {
+  // The proto3 zero value (buf-STANDARD _UNSPECIFIED zero). Means "the field was
+  // never set" and MUST resolve to today's behavior — PIPES — so the freeze
+  // addition is byte-identical for every pre-existing config (no wire-default
+  // surprise; the hostagent.v1 §10 "shape frozen" discipline).
+  STDIO_DISPOSITION_UNSPECIFIED = 0;
+  // Pipes: the runtime's stdin/stdout/stderr are os.Pipe pairs (the M0 headless
+  // wiring the host agent uses today). Explicitly selecting it == UNSPECIFIED.
+  STDIO_DISPOSITION_PIPES = 1;
+  // Pty: the runtime is launched on a controlling pseudo-terminal (the terminal-
+  // MVP path) so an interactive TUI agent paints under a real tty; the raw-
+  // terminal frames carry the bytes (attach.v1 ENDPOINT_TRANSPORT_RAW_TERMINAL).
+  STDIO_DISPOSITION_PTY = 2;
+
+  // Reserved for forward stdio-disposition growth (e.g. a pipes+pty hybrid, a
+  // null/devnull disposition). Additive enum values only, never a v2.
+  reserved 3 to 15;
+}
+
+// TerminalSize is the pty window dimensions seeded at launch (the additive
+// terminal-MVP rider; docs/serpent-cli-mvp/10-build-decisions §A3 res. 7 / G9).
+// Carried on LaunchSpec.initial_window so the runtime's pty is sized BEFORE the
+// agent's first paint — no 80x24-then-reflow jump from frame 1. Only meaningful
+// when LaunchSpec.stdio is PTY; ignored otherwise. A zero rows/cols = unset (the
+// host agent's default), never a literal 0x0 window.
+message TerminalSize {
+  // The pty window height in character rows (TIOCSWINSZ ws_row). 0 = unset.
+  uint32 rows = 1;
+  // The pty window width in character columns (TIOCSWINSZ ws_col). 0 = unset.
+  uint32 cols = 2;
+
+  // Reserved for forward terminal-geometry growth (e.g. xpixel/ypixel for clients
+  // that report pixel dimensions). Additive fields only.
+  reserved 3 to 15;
+}
+
+// LaunchSpec is the exec/supervise surface the host agent resolves for the runtime
+// (doc 15 §4.1 step 8 "exec/supervise spec"). It names HOW to start the agent
+// runtime inside the guest — the command, args, environment, and working dir — as
+// resolved from the D7-recorded env config. Runtime-IGNORANT (D20/D38): these are
+// generic process-launch fields; nothing here names a specific runtime (Claude
+// Code's specifics live in client/wrapper/adapters/claude-code/, D49).
+message LaunchSpec {
+  // The entrypoint program to exec inside the guest (absolute path or PATH-resolved
+  // name). Resolved by the host agent from the env config; the runtime-specific
+  // launcher is an adapter detail, never a field here.
+  string command = 1;
+
+  // The entrypoint arguments, in order. Empty for a bare command.
+  repeated string args = 2;
+
+  // Additional environment variables for the runtime process, as KEY=VALUE entries
+  // (the env-spec-resolved, non-secret runtime environment; D7). NEVER credential
+  // material (D39) — the egress wiring's proxy/CA references and the session-token
+  // fetch endpoint carry the security-relevant settings, never a secret VALUE here.
+  repeated string env = 3;
+
+  // The working directory to exec the runtime in (e.g. the repo clone root). Empty
+  // = the runtime's default. The repo-source clone is wired by the host agent
+  // (doc 15 §4.1 step-8 sub-step); this names where the runtime starts against it.
+  string working_dir = 4;
+
+  // How the host agent wires the runtime's stdio at launch (StdioDisposition).
+  // The default 0/UNSPECIFIED MUST mean today's behavior — PIPES — byte-identical,
+  // so this additive field is invisible to every already-resolved M0 config; PTY
+  // selects the terminal-MVP path (docs/serpent-cli-mvp/10-build-decisions §A3).
+  // Un-reserved from the former `reserved 5 to 20` (the "stdin/stdout disposition"
+  // slot the original reserved-tail comment already anticipated). ADDITIVE rider.
+  StdioDisposition stdio = 5;
+
+  // The pty window size to seed at launch (TerminalSize), so a PTY runtime paints
+  // at the right geometry from frame 1 with no 80x24-then-reflow jump (G9). Unset
+  // (nil / zero rows&cols) = the host agent's default; only meaningful when stdio
+  // is PTY. Un-reserved from the former `reserved 5 to 20`. ADDITIVE rider.
+  TerminalSize initial_window = 6;
+
+  // Reserved for forward launch-surface growth (e.g. a resource/ulimit sub-message,
+  // a restart policy, a per-runtime adapter-selector ref once the OpenClaw /
+  // own-loop paths land — D20). Additive fields only. (Fields 5 and 6 un-reserved
+  // for the additive stdio/initial_window terminal-MVP rider — see above.)
+  reserved 7 to 20;
+}
+
+// Budget is the runtime-facing budget envelope the host agent hands the guest
+// (doc 15 §8 create→attach budget posture, D81 — instrument first, gate later; D57
+// metering). These are the runtime's SELF-LIMITING inputs (a wall-clock ceiling, a
+// token/cost ceiling the wrapper can surface) — NOT the billing meter (billing
+// derives from session-record state transitions, doc 15 §5.6/§320, never from a
+// runtime-reported number) and NOT a guardrail (a compromised runtime that ignores
+// the budget changes nothing the boundary/orchestrator enforce). VALUES are
+// rig-tuned and org-set; the SHAPE freezes (the hostagent.v1 §10 precedent).
+message Budget {
+  // Wall-clock ceiling for this runtime invocation, seconds (0 = no runtime-facing
+  // ceiling; the orchestrator/D46 escalation clock is the real lifecycle authority,
+  // doc 15 §4.3). A self-limiting input, never the lifecycle gate.
+  uint64 wall_clock_seconds = 1;
+
+  // A token/cost ceiling the wrapper MAY surface to the runtime, in
+  // implementation-defined micro-units (0 = unset). Self-limiting; the authoritative
+  // metering is session-record-derived (doc 15 §5.6), never this number.
+  uint64 token_micro_units = 2;
+
+  // Reserved for forward budget-axis growth (e.g. a per-tool-class ceiling, a
+  // subagent-fan-out budget at D18/M3, a wall-clock vs cpu-time split). Additive
+  // fields only — generous for the M3 fan-out where one prompt spawns N children.
+  reserved 3 to 20;
+}
+
+// AttachWiring tells the guest WHERE its VM-local event socket lives — the D38
+// socket that terminates host-side at the host agent (doc 15 §4.1 step 8 "local
+// event socket up", §5.4). The guest's runtime wrapper emits attach events onto
+// this guest-local UDS; the host agent reads them off the other end and projects
+// them onto the dreamserpent.attach.v1 SessionEvent schema (a SEPARATE package /
+// seam — this wiring NAMES the socket, it does NOT re-declare the event vocabulary).
+message AttachWiring {
+  // The guest-local UNIX-domain socket PATH the runtime wrapper emits events onto
+  // (e.g. "/run/ds/attach.sock"). A guest-local filesystem path — the host agent
+  // terminates the other end (D38). NOT a network endpoint: the events flow over a
+  // guest-LOCAL UDS, never the egress boundary.
+  string event_socket_path = 1;
+
+  // Reserved for forward attach-wiring growth (e.g. an input-activity socket once
+  // the D78 attendedness input-events leg lands — doc 15 §5.5; a per-stream framing
+  // selector; a readiness-signal path distinct from the event socket). Additive
+  // fields only.
+  reserved 2 to 15;
+}
+
+// EgressWiring is the runtime's view of the TLS-terminating egress gateway
+// (ds-tlsproxy) and the per-session interception CA — REFERENCES ONLY, never key or
+// cert MATERIAL (D17/D39/D8). The per-session CA is injected into the guest trust
+// store before boot, fail-closed (doc 15 §4.1 step 7); this message names WHERE the
+// proxy is and WHERE the already-injected CA bundle lives on the guest filesystem,
+// so the runtime trusts the re-originated leaves the egress gateway presents. A
+// compromised runtime learns the proxy address and a bundle PATH — nothing
+// rotatable, the structural D8 promise.
+message EgressWiring {
+  // The HTTP proxy endpoint the runtime sets HTTP_PROXY to (host:port on the
+  // per-session guest's host-local gateway address; the TLS-terminating egress
+  // gateway, ds-tlsproxy, D17/TLS-2). Address only — opaque to the runtime.
+  string http_proxy = 1;
+
+  // The HTTPS proxy endpoint the runtime sets HTTPS_PROXY to (host:port; the same
+  // egress gateway). Address only.
+  string https_proxy = 2;
+
+  // The no-proxy list the runtime sets NO_PROXY to — the host-local aliases reached
+  // WITHOUT the egress boundary (e.g. the host-local git mirror / package cache,
+  // doc 15 §4.1 step-8 sub-step). Comma-join is the caller's; carried as entries.
+  repeated string no_proxy = 3;
+
+  // The guest-filesystem PATH to the CA bundle the runtime trusts (the per-session
+  // interception CA, injected into the overlay trust store before boot — doc 15
+  // §4.1 step 7, D17). A REFERENCE to an already-on-disk bundle, NEVER the cert/key
+  // material itself (D17/D39/D8). The runtime points its TLS client (and any
+  // SSL_CERT_FILE-class env) at this path; the bytes were placed by the fail-closed
+  // injection step, not carried on this wire.
+  string ca_bundle_path = 4;
+
+  // Reserved for forward egress-wiring growth (e.g. a separate SSL_CERT_DIR ref, a
+  // pass-through-list hint for cert-pinned clients per D17, a per-protocol proxy
+  // split once TLS-6's http-policy capability gate lands — D74). Additive REFERENCE
+  // fields only — NEVER material (D39).
+  reserved 5 to 20;
+}
+
+// EntrypointConfig is the structured boot config the host agent resolves and hands
+// the guest VM at boot (D38; doc 15 §4.1 step 8). It is the STRUCTURED launch
+// surface (OQ-A) — LaunchSpec / PermissionPosture / Budget / AttachWiring /
+// EgressWiring, all host-agent-resolved and host-agent-acted — PLUS the OPAQUE
+// role-axis runtime overlay (`role_overlay_ref`) the orchestrator NEVER inspects
+// (consistent with roles.v1's opaque entrypoint_config_overlay_ref, D38/D20).
+//
+// The orchestrator passes an opaque entrypoint-config REF in VmSpec and never sees
+// this resolved shape; the HOST AGENT resolves the ref into this message at step 8.
+// This is the one-shot M0 freeze SHAPE (OQ-C): a missed field is a v2-package event.
+message EntrypointConfig {
+  // The session this config is for — the SHARED join quartet (boundary.v1.SessionRef,
+  // D66/D44), imported never re-declared. The guest echoes this same ref back
+  // through EntrypointService (entrypoint.proto), so the host agent joins the
+  // readiness/exit report to the authoritative session record by the one join key.
+  dreamserpent.boundary.v1.SessionRef session_ref = 1;
+
+  // The exec/supervise launch surface (LaunchSpec). Host-agent-resolved from the
+  // D7 env config; runtime-ignorant.
+  LaunchSpec launch = 2;
+
+  // The runtime-facing permission posture (PermissionPosture). An INPUT to the
+  // runtime, never a guardrail (the boundary is the authority, D42).
+  PermissionPosture posture = 3;
+
+  // The runtime-facing budget envelope (Budget). Self-limiting inputs; the
+  // authoritative meter is session-record-derived (doc 15 §5.6).
+  Budget budget = 4;
+
+  // Where the guest-local event socket lives (AttachWiring) — the D38 socket
+  // terminating host-side at the host agent (doc 15 §5.4).
+  AttachWiring attach = 5;
+
+  // The egress-gateway + CA-bundle REFERENCES (EgressWiring) — addresses and a
+  // bundle PATH only, never material (D17/D39).
+  EgressWiring egress = 6;
+
+  // The OPAQUE role-axis runtime overlay (OQ-A). The orchestrator NEVER inspects
+  // this; it is the wire carriage of roles.v1's RoleRuntime.entrypoint_config_overlay_ref
+  // (doc 18 §2 axis (e), D38/D20) — the role's runtime overlay, applied by the
+  // runtime/adapter inside the guest, opaque to the control plane the whole way.
+  // Carried as raw bytes so the orchestrator cannot (and is not tempted to) inspect
+  // it; an empty value = no overlay (the role's YAML `runtime: null`). Whether these
+  // bytes are an inline overlay blob or a content-addressed REF is the seam owner's
+  // call and stays free under OQ-C (the field name says "ref" to match roles.v1's
+  // vocabulary; either reading is the same opaque-to-the-orchestrator contract).
+  bytes role_overlay_ref = 7;
+
+  // The session-token FETCH endpoint — WHERE the guest reaches the host-local D22
+  // shim to obtain its short-lived session token at boot (doc 15 §4.1 step 8 "session
+  // token via the D22 shim"). An ADDRESS/REFERENCE only — NEVER the token VALUE
+  // (D39): the token is fetched by the guest, never carried on this config. Empty
+  // when the host folds token delivery into another channel.
+  //
+  // The reference MAY be a vsock URL (e.g. vsock://host:<port>/token) as well as an
+  // http URL: the U5 authz hardening serves the token over AF_VSOCK and authorizes by
+  // the connecting guest's unforgeable peer CID (no session id on the wire). This is
+  // still a REFERENCE, never the value — the field type and number are unchanged, so
+  // the one-shot runtime.v1 freeze is NOT reopened by this clarification.
+  string session_token_endpoint = 8;
+
+  // Reserved GENEROUSLY for forward boot-surface growth AND for slots a later boot
+  // sub-step will want additively (e.g. a repo-source clone-URL sub-message once the
+  // doc 15 §4.1 step-8 mirror selection is wire-carried rather than env-folded; a
+  // snapshot/restore-resume marker for the D46 park path; a host-baseline/image-id
+  // echo; a structured readiness-probe spec). A field missed at this one-shot freeze
+  // is a v2 — so the range is wide (D18/M3 fan-out). Additive fields only; NEVER
+  // credential material (D39).
+  reserved 9 to 50;
+}

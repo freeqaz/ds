@@ -1,0 +1,43 @@
+{
+  "_comment": "Biscuit appended-block READ-PATH golden (doc 19 §4/§6, D98). The session-token library reads the EFFECTIVE (deepest) claim set off an attenuated Biscuit through biscuit-go's debug Code() renderer (sessiontoken_biscuit.go: claimsTermRe over b.Code()[n-1]), because biscuit-go v2.2.0 surfaces appended blocks only through that render path, not the authority Query path. That makes the renderer's BLOCK SHAPE a load-bearing parse contract: a biscuit-go upgrade that changes how an appended block renders (spacing, the session_token_claims(N, \"...\") term form, quoting, the Block { } scaffold) would silently break the read path. This fixture PINS that shape so such a drift fails LOUDLY at test time instead of mis-parsing a token in production. The biscuit-go version stays pinned at v2.2.0 (go.mod); this golden is the tripwire if it ever moves. Synthetic only (D50): synthetic UUIDs/role/task, a fresh in-test Ed25519 key, no secrets anywhere — the rendered payload is base64url(JSON of a synthetic claim record).",
+  "biscuit_go_version": "v2.2.0",
+  "claims_fact_name": "session_token_claims",
+  "appended_block": {
+    "_comment": "The EXACT biscuit-go v2.2.0 Code() render of one appended attenuation block carrying a session_token_claims(depth, payload) fact, with the base64url payload substituted by %PAYLOAD%. Tabs and newlines are literal; %PAYLOAD% is the only variable. The read path's claimsTermRe must match against this shape; a renderer that emits a different scaffold breaks the assertion.",
+    "depth": 1,
+    "render_template": "Block {\n\t\tsession_token_claims(1, \"%PAYLOAD%\")\n\t\t\n\t\t\n\t}",
+    "payload_placeholder": "%PAYLOAD%"
+  },
+  "round_trip": {
+    "_comment": "A full mint->attenuate->Verify round trip pinned on a SYNTHETIC claim set. The base64url payload is a deterministic function of the child claim JSON, so it is pinned exactly; the read path must decode it back to these claims through the Code() render. This catches both a renderer-shape drift (the appended_block template above) AND a payload-encoding drift (the base64url/JSON claim encoding) in one self-checking case.",
+    "base_claims": {
+      "LaunchingUser": "idp|launching-subject",
+      "SessionUUID": "00000000-0000-4000-8000-000000000a01",
+      "Org": "acme",
+      "RepoBranch": "acme/app@main",
+      "RoleRef": "role:reviewer",
+      "TaskRef": "task:01KTWJ74V8",
+      "ParentSession": "",
+      "Services": ["github", "npm"],
+      "Expiry": "2026-06-12T20:00:00Z"
+    },
+    "narrow": {
+      "ChildSessionUUID": "00000000-0000-4000-8000-0000000000c1",
+      "Services": ["github"],
+      "TaskRef": "task:child"
+    },
+    "expected_child_claims": {
+      "LaunchingUser": "idp|launching-subject",
+      "SessionUUID": "00000000-0000-4000-8000-0000000000c1",
+      "Org": "acme",
+      "RepoBranch": "acme/app@main",
+      "RoleRef": "role:reviewer",
+      "TaskRef": "task:child",
+      "ParentSession": "00000000-0000-4000-8000-000000000a01",
+      "RootSession": "00000000-0000-4000-8000-000000000a01",
+      "Services": ["github"],
+      "Expiry": "2026-06-12T20:00:00Z"
+    },
+    "expected_payload_b64url": "eyJMYXVuY2hpbmdVc2VyIjoiaWRwfGxhdW5jaGluZy1zdWJqZWN0IiwiU2Vzc2lvblVVSUQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwYzEiLCJPcmciOiJhY21lIiwiUmVwb0JyYW5jaCI6ImFjbWUvYXBwQG1haW4iLCJSb2xlUmVmIjoicm9sZTpyZXZpZXdlciIsIlRhc2tSZWYiOiJ0YXNrOmNoaWxkIiwiUGFyZW50U2Vzc2lvbiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMGEwMSIsIlJvb3RTZXNzaW9uIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwYTAxIiwiU2VydmljZXMiOlsiZ2l0aHViIl0sIkV4cGlyeSI6IjIwMjYtMDYtMTJUMjA6MDA6MDBaIn0"
+  }
+}

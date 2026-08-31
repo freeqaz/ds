@@ -1,0 +1,87 @@
+# ds-slirp-net.service — bring up SLIRP/dev egress via systemd-networkd DHCP, on the
+# SLIRP path ONLY. Fixes the no-IP/no-DNS SLIRP hang (a SLIRP-NIC guest with no DHCP
+# client never gets an address/resolver, so CC loops on api_retry; live-found
+# 2026-06-18).
+#
+# WHY A SERVICE (not a shipped /etc/systemd/network/*.network): the SLIRP NIC and the
+# routed production tap share NIC NAMES (both `eth0` under net.ifnames=0, both `en*`
+# under default naming) and are both virtio-net — there is NO static [Match] property
+# that tells them apart at boot. The only reliable boot-time signal is the presence of
+# ds-net.env on the per-session config-drive: the host renders it ONLY for the routed
+# tap (netconfig.go, gated on LiveConfig.RoutedTap). So we gate at the SERVICE level —
+# this unit runs ONLY when ds-net.env is ABSENT, and only then does it place the DHCP
+# .network (ds-slirp-dhcp.network) where networkd can see it. On a routed-tap boot the
+# .network is never loaded, so networkd cannot manage — let alone DHCP-race —
+# the tap NIC; ds-netcfg.service owns the static per-session apply there.
+#
+# ORDERING:
+#   After=run-ds-entrypoint.mount   — LOAD-BEARING: the routed-tap signal (ds-net.env)
+#                                     lives on the config-drive, so the drive MUST be
+#                                     mounted before the ConditionPathExists=! below is
+#                                     evaluated. Without this a routed-tap boot could
+#                                     read ds-net.env as (not-yet-)absent and wrongly
+#                                     install the DHCP .network. Same drive + ordering
+#                                     ds-netcfg.service already relies on.
+#   After=systemd-networkd.service  — we `networkctl reload`, so networkd must be up.
+#   Before=ds-entrypoint.service    — bring egress up before CC launches (DHCP itself
+#                                     completes asynchronously; this only orders the
+#                                     install+reload, mirroring ds-netcfg's posture).
+#
+# DBUS IS A HARD DEPENDENCY OF ExecStart STEP 3: on systemd 252 (bookworm) `networkctl
+# reload` is a method call to org.freedesktop.network1 over the D-Bus SYSTEM BUS — there
+# is no varlink fallback at that version. The 2026-07-29 routed-cc bake shipped NO dbus
+# at all (both bakes install with --no-install-recommends / debootstrap minbase, and
+# systemd only RECOMMENDS dbus), so this unit FAILED at execution: the .network landed in
+# /run/systemd/network but the already-running networkd never re-read it, the SLIRP NIC
+# was never addressed, and in-guest CC died with "API Error: FailedToOpenSocket". Boot
+# still proceeded because ds-entrypoint pulls this unit via Wants, not Requires — the
+# failure is SILENT unless you read the unit's status. Both bakes now install dbus
+# EXPLICITLY. For images ALREADY baked without it, the host-side stopgap is ip=dhcp on
+# the kernel cmdline (scripts/live-mvp/ds-serve-stack.sh): systemd-network-generator
+# renders the DHCP config BEFORE networkd starts, so no reload — and no bus — is needed.
+#
+# DO NOT gate on network-online.target: this unit is part of BRINGING the network up
+# (it installs the DHCP config), so a Wants/After on network-online.target would
+# deadlock — exactly the reasoning ds-netcfg.service / ds-entrypoint.service apply.
+#
+# build-m0-image.sh substitutes __SLIRP_NETWORK_STAGE__ / __ENTRYPOINT_CONFIG_DIR__ /
+# __NETCFG_FILE__ at bake time (single-sourced from m0-image.env).
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[Unit]
+Description=Dream Serpent SLIRP/dev DHCP egress (systemd-networkd, gated off the routed tap)
+Documentation=https://github.com/dream-serpent/dream-serpent/blob/main/vm/m0-image/README.md
+# The routed-tap signal (ds-net.env) rides the mounted config-drive; mount it first.
+After=run-ds-entrypoint.mount
+# We reload networkd to pick up the installed .network; it must be running.
+After=systemd-networkd.service
+Wants=systemd-networkd.service
+# Configure the SLIRP egress before the entrypoint launches the egressing runtime.
+Before=ds-entrypoint.service
+# SLIRP path ONLY: run when the routed-tap signal ds-net.env is ABSENT. Present =>
+# routed tap => skip (ds-netcfg.service owns the NIC; networkd must not DHCP-race it).
+# This is the gate that makes the DHCP .network provably unable to catch the routed tap.
+ConditionPathExists=!__ENTRYPOINT_CONFIG_DIR__/__NETCFG_FILE__
+# Fail closed if the staged DHCP .network was never baked (M0 skeleton state).
+ConditionPathExists=__SLIRP_NETWORK_STAGE__
+
+[Service]
+Type=oneshot
+# The install persists for the unit's lifetime; RemainAfterExit so the ordering
+# (Before=ds-entrypoint) is satisfied by a completed install.
+RemainAfterExit=yes
+# Place the staged DHCP .network into networkd's RUNTIME search path (/run is tmpfs,
+# wiped each boot — so this is per-boot and leaves no trace on a routed-tap boot,
+# where the unit is skipped) and reload networkd so it matches + DHCPs the SLIRP NIC.
+ExecStart=/usr/bin/mkdir -p /run/systemd/network
+ExecStart=/usr/bin/cp __SLIRP_NETWORK_STAGE__ /run/systemd/network/10-ds-slirp-dhcp.network
+ExecStart=/usr/bin/networkctl reload
+
+[Install]
+WantedBy=multi-user.target
+# Pull SLIRP DHCP into the entrypoint's graph too. Best-effort (WantedBy, not
+# RequiredBy): a routed-tap boot skips this unit by condition (a skipped condition is
+# success, not failure), so a Required dep would be wrong; WantedBy/RequiredBy are
+# [Install] directives — systemd IGNORES them in [Unit] (live-found 2026-06-17).
+WantedBy=ds-entrypoint.service

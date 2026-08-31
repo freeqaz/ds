@@ -1,0 +1,36 @@
+# role: developer — code-writing sessions (strawman; doc 18 §5).
+# Equips the agent for hands-on development: dev tooling layer, code-work skills,
+# standard network posture, write-capable VCS grants. All refs are STRAWMEN —
+# the skill registry is a named gap (doc 18 OQ2) and layer digests don't exist yet.
+schema_version: role/v0
+name: developer
+version: "2026.06.11-v1"
+description: >
+  Development role: language toolchains, debuggers, gh CLI; code-review and
+  test-runner skills; standard posture; read-write VCS scope.
+
+image:
+  layers:
+    - "images:layer/dev-tools@STRAWMAN"     # LSPs, debuggers, gh CLI, formatters —
+                                            # built by images/golden, referenced here
+
+skills:
+  install:
+    - "skills:code-review@1"                # STRAWMAN refs (doc 18 OQ2)
+    - "skills:test-runner@1"
+    - "skills:repo-navigation@1"
+
+policy:
+  posture: standard
+  pack_families: {}               # core/vcs/packages are already enabled in the
+                                  # baseline pack (doc 13 §3) — no widening needed
+  allowlist: []
+  guardrails: []                  # org-layer rate caps (e.g. gh-push-rate) apply as-is
+
+credentials:
+  scope_template:
+    services: [github]            # the D55/D83 GitHub bundle: header-swap path,
+    mode: read-write              #   write-capable — commits are the point
+
+runtime:
+  entrypoint_config_overlay_ref: null

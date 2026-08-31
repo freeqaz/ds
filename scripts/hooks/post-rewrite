@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# taskdb post-rewrite hook: rebuild the live SQLite store from tasks/*.json
+# after history is rewritten (e.g. `git rebase`), so the working DB matches
+# the rewritten commits.
+#
+# Git invokes this with the rewrite command name as $1 (e.g. "rebase"); we
+# thaw regardless, since any rewrite may have moved task state.
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# Linked worktree (.git is a file): task state belongs to the primary checkout.
+if [[ -f "$REPO_ROOT/.git" ]]; then
+	exit 0
+fi
+
+TASKDB="$REPO_ROOT/.bin/taskdb"
+
+if [[ ! -x "$TASKDB" ]]; then
+	exit 0
+fi
+
+# Hooks are a convenience, never a gate: a thaw failure must not abort the git
+# operation. `--auto-freeze` (the hook-path remedy) additively freezes any
+# live-only rows to tasks/*.json and proceeds, so the routine live-only-DROP
+# refusal no longer happens here. A remaining non-zero exit is therefore NOT a
+# drop-guard refusal — it is an FK/dangling-reference error or a genuine failure
+# that must be SEEN, not swallowed. Capture the combined output; on success stay
+# silent, on failure surface a loud banner on stderr and still exit 0.
+if ! thaw_out="$("$TASKDB" thaw --auto-freeze 2>&1)"; then
+	{
+		printf '\n'
+		printf '!!! taskdb thaw FAILED — live DB left STALE vs tasks/*.json !!!\n'
+		printf '%s\n' "$thaw_out"
+		printf '\n'
+		printf 'The git operation succeeded, but the live taskdb.sqlite was NOT rebuilt.\n'
+		printf '--auto-freeze already preserves live-only rows, so this is NOT a routine\n'
+		printf 'drop-guard refusal:\n'
+		# Distinguish causes: a FOREIGN KEY error is a dangling
+		# depends_on/parent_id/note.task_id target — NOT helped by --force (thaw
+		# prunes+warns those itself); anything else is a genuine failure to inspect.
+		if printf '%s' "$thaw_out" | grep -qi 'FOREIGN KEY constraint failed'; then
+			printf ' - FOREIGN KEY error (a dangling reference). Do NOT run `thaw --force`;\n'
+			printf '   it will NOT clear an FK error. Inspect tasks/*.json for the corrupt\n'
+			printf '   reference.\n'
+		else
+			printf ' - a genuine thaw failure (e.g. a malformed tasks/*.json or a disk\n'
+			printf '   error). Inspect the message above.\n'
+		fi
+		printf 'See scripts/taskdb/README.md (thaw is guarded).\n'
+		printf '\n'
+	} >&2
+fi

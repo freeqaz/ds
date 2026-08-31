@@ -1,0 +1,7 @@
+::session attached  model=claude-sonnet-4-6  runtime=2.1.173  perm=bypassPermissions  cwd=/work  tools=[Task,Bash]
+--state -> WORKING (requesting)
+> assistant: Starting the long analysis pass now.
+% quota five_hour allowed_warning (provisional)
+==session error_max_budget_usd turns=2 dur=3300ms
+--state -> ATTACHED (turn_complete)
+[ session 000000000020 | state ATTACHED | error_max_budget_usd | seq 6 ]

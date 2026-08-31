@@ -1,0 +1,53 @@
+# coverage.jsonl — the BROAD-COVERAGE multi-turn headless-drive script (JSONL).
+#
+# Where proof.jsonl pins a single deterministic Bash-write proof, this fixture
+# drives a real Claude Code session across the breadth of its tool surface so the
+# DS_KVM_LIVE-gated KVM-tier test (script_test.go: TestScriptedDriveKVMCoverageReal)
+# can assert the corresponding attach.v1 projections per feature — ToolInvoked/
+# ToolCompleted correlated by node_id, a TYPED PlanDelta (TodoWrite full-list
+# snapshot), an ask request→resolve round-trip on BOTH the allow and deny
+# branches, an IsError tool completion (a failing-but-granted tool, distinct from
+# a deny), a nested-Task subagent spawn, and one session.accounted per turn —
+# alongside the REAL in-VM side effects (the proof files each write turn writes to
+# /work, read back from the host side of the guest /work share).
+#
+# One Turn per non-blank, non-'#' line. Every key is STRICT (a typo'd field is a
+# loud parse error). Each WRITE turn embeds a UNIQUE deterministic token and an
+# assert{file,contains} the live test reads back from /work; turns that only
+# exercise a tool firing (Glob/Grep search, the deny branch) carry no assert (the
+# projected ToolInvoked/AskResolved event IS the proof there). At least one turn
+# is allow=true and one is allow=false, so BOTH grant branches are exercised on
+# the proven attach.v1 grant path (never --dangerously-skip-permissions).
+#
+# Tokens share the COV-...-9X4T suffix so a single grep over /work after the run
+# corroborates the whole fixture executed end to end.
+
+# (1) Bash — write a proof file, allow the tool. Token: COV-BASH-9X4T.
+{"prompt":"Using the Bash tool, run exactly this and then stop: printf '%s' 'COV-BASH-9X4T' > /work/cov-bash.txt","allow":true,"assert":{"file":"cov-bash.txt","contains":"COV-BASH-9X4T"}}
+
+# (2) Write — create a NEW file via the Write tool (not Bash), allow it. Token: COV-WRITE-9X4T.
+{"prompt":"Using the Write tool (not Bash), create the file /work/cov-write.txt with exactly this content and nothing else: COV-WRITE-9X4T","allow":true,"assert":{"file":"cov-write.txt","contains":"COV-WRITE-9X4T"}}
+
+# (3) Read + Edit — read cov-write.txt, then Edit it to APPEND a second line. Edit is a distinct native tool name. Allow it. Token: COV-EDIT-9X4T.
+{"prompt":"First use the Read tool to read /work/cov-write.txt. Then use the Edit tool to append a new line so the file ends with a line reading exactly: COV-EDIT-9X4T . Do not use the Bash tool.","allow":true,"assert":{"file":"cov-write.txt","contains":"COV-EDIT-9X4T"}}
+
+# (4) TodoWrite — record a 2-item plan with the TodoWrite tool, then UNCONDITIONALLY write the Bash proof. The TodoWrite tool-use projects a TYPED attach PlanDelta (Kind=todo_write, Todos[]). Token: COV-PLAN-9X4T. The prompt decouples the proof write (always do it) from the plan-tool choice (best-effort), so the in-VM proof is reliable even when the model judges the tiny plan not worth a TodoWrite. (Model routing for plan tools is non-deterministic; the live test treats the typed PlanDelta as best-effort and the offline twin asserts it deterministically.)
+{"prompt":"This turn has TWO independent steps; do BOTH. STEP 1 (the plan): use the TodoWrite tool to record exactly this 2-item todo list: [{content: \"write the plan proof file\", status: \"in_progress\", activeForm: \"writing the plan proof file\"}, {content: \"stop\", status: \"pending\", activeForm: \"stopping\"}]. STEP 2 (the proof, ALWAYS do this regardless of step 1): use the Bash tool to run exactly: printf '%s' 'COV-PLAN-9X4T' > /work/cov-plan.txt . Then stop.","allow":true,"assert":{"file":"cov-plan.txt","contains":"COV-PLAN-9X4T"}}
+
+# (5) Glob — search /work with the Glob tool by NAME (the Glob tool name must appear), then write a token via Bash. Allow it. Token: COV-GLOB-9X4T. (Best-effort live; the model may shortcut the search to Bash/ls.)
+{"prompt":"Your FIRST action must be a call to the Glob tool (not Bash, not LS) with pattern \"*.txt\" and path \"/work\" to list the matching files; report what it returned. Only after the Glob call returns, use the Bash tool to run exactly: printf '%s' 'COV-GLOB-9X4T' > /work/cov-glob.txt","allow":true,"assert":{"file":"cov-glob.txt","contains":"COV-GLOB-9X4T"}}
+
+# (6) Grep — search /work with the Grep tool by NAME (the Grep tool name must appear), then write a token via Bash. Allow it. Token: COV-GREP-9X4T. (Best-effort live; the model may shortcut the search to Bash/grep.)
+{"prompt":"Your FIRST action must be a call to the Grep tool (not Bash, not the shell grep) to search for the literal string COV-WRITE-9X4T across the /work directory; report which file matched. Only after the Grep call returns, use the Bash tool to run exactly: printf '%s' 'COV-GREP-9X4T' > /work/cov-grep.txt","allow":true,"assert":{"file":"cov-grep.txt","contains":"COV-GREP-9X4T"}}
+
+# (7) Grep DENY — the deny branch on a read-only search. No proof file (cov-denied.txt must be ABSENT after the run). The deny node carries a DenialMessage.
+{"prompt":"Use the Grep tool to search for the literal string COV-WRITE-9X4T across the /work directory, then report which file matched. Do not write or modify any file.","allow":false,"deny_message":"Search denied by the coverage drive (deny branch) — report that the tool was blocked."}
+
+# (8) IsError — a READ of a nonexistent path FAILS, so its tool.completed carries IsError=true. Read is read-only and auto-allows, so this errored completion has NO permission ask at all — it is provably distinct from turn 7's deny (which carries an ask.resolved deny). No proof file is written (the read fails).
+{"prompt":"Using the Read tool, read exactly the file path /work/this-path-does-not-exist-COV-ERR-9X4T.txt and then stop. It is expected to fail because the file does not exist; just report the error.","allow":true,"assert":null}
+
+# (9) Task — dispatch a subagent (subagent_type general-purpose) whose job is to itself run a Bash write to /work, so the subagent lifecycle (spawn->...->completed/accounted) correlates by node_id with a nested tool under it. Allow it. Token: COV-TASK-9X4T.
+{"prompt":"Use the Task tool to dispatch a subagent (subagent_type general-purpose) whose entire job is: using the Bash tool, run exactly printf '%s' 'COV-TASK-9X4T' > /work/cov-task.txt and then stop.","allow":true,"assert":{"file":"cov-task.txt","contains":"COV-TASK-9X4T"}}
+
+# (10) MultiEdit — create a seed file, then in ONE MultiEdit call apply TWO hunks (two distinct old_string->new_string replacements). MultiEdit is a distinct native tool name from Edit; the offline twin hard-asserts its tool.invoked/completed pair + two-hunk input. The proof file (cov-medit.txt) should carry BOTH replaced tokens. Allow it. Tokens: COV-MEDIT-A-9X4T and COV-MEDIT-B-9X4T. (No assert: LIVE-best-effort — the real model often declines a multi-hunk edit on a tiny file and leaves the seed; the dedicated multi-hunk check below is logged-not-failed live and the offline twin proves the pair deterministically.)
+{"prompt":"First use the Write tool to create /work/cov-medit.txt with exactly these two lines and nothing else:\nALPHA-SEED\nBETA-SEED\nThen, in a SINGLE call to the MultiEdit tool (not Edit, not Bash), apply BOTH of these edits to /work/cov-medit.txt at once: replace 'ALPHA-SEED' with 'COV-MEDIT-A-9X4T' and replace 'BETA-SEED' with 'COV-MEDIT-B-9X4T'. Then stop.","allow":true,"assert":null}

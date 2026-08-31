@@ -1,0 +1,8 @@
+::session attached  model=claude-sonnet-4-6  runtime=2.1.173  perm=bypassPermissions  cwd=/work  tools=[Task,Bash]
+--state -> WORKING (requesting)
+ ~thinking: The user just said hello. I will answer briefly.
+> assistant: Hello! How can I help you today?
+% quota five_hour allowed (provisional)
+==session success turns=1 dur=2100ms reason=completed
+--state -> ATTACHED (turn_complete)
+[ session 000000000010 | state ATTACHED | success | seq 7 ]

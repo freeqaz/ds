@@ -1,0 +1,21 @@
+# drift class: baseline-pack families declared in a non-shipped order.
+# named edge shape: reordered families.
+# expected verdict (go, rust) = (accept, accept)
+# Both readers are order-insensitive over the families mapping: the Rust parser
+# stores families in a BTreeMap (order-independent by construction) and the Go
+# scanner never reads families at all. Reordering is benign on BOTH sides — this
+# fixture pins that agreement so a future reader that became order-sensitive on
+# only one side is caught. Both-accept quadrant.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+baseline_pack:
+  families:
+    packages: { tier: enabled }
+    vcs: { tier: enabled }
+    core: { tier: enabled }
+blocklist:
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

@@ -1,0 +1,21 @@
+# npmrc — npm client wiring for the site-local cache (D41).
+#
+# Golden images (../../golden/) bake this as /etc/npmrc (or ~/.npmrc) so every
+# session resolves npm through the pull-through cache. Upstream registry.npmjs.org
+# is reached ONLY on a cache miss, by the cache host — never by the session VM
+# directly. The cache implements no registry semantics; it proxies (D41).
+#
+# Endpoint matches deploy/repos.yaml (npm-proxy) and deploy/nexus.container :8081.
+# `cache.ds.local` resolves in-VM to the cache host through the egress boundary's
+# allow-set (ds-dnsgate / ds-tlsproxy, D63).
+
+registry=http://cache.ds.local:8081/repository/npm-proxy/
+
+# Scoped registries resolve through the same proxy; no per-scope override needed.
+# If a private scope is later fronted by a sibling proxy repo, add:
+#   @your-scope:registry=http://cache.ds.local:8081/repository/npm-yourscope/
+
+# The cache terminates upstream TLS; the in-VM hop is plain HTTP to a host-local
+# endpoint behind the boundary. Keep strict-ssl default for any https endpoints.
+fetch-retries=2
+fetch-retry-factor=2

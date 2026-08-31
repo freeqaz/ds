@@ -1,0 +1,38 @@
+# drift class: COMPOUND both-ACCEPT — both reader surfaces are exercised at once
+#   under INDEPENDENT benign variations, and BOTH accept. The baseline-pack families
+#   are declared in a non-shipped order (resolver-lock SHAPE variation, Go-benign)
+#   AND a guardrail rule declares a valid rung (POL-1 SCHEMA variation, Rust-benign).
+# named edge shape: reordered families (Go) + provenanced guardrail rung (Rust).
+# expected verdict (go, rust) = (accept, accept)  <-- compound both-accept, DIFFERENT axes
+# This is the both-ACCEPT complement of the both-REJECT compound block (20-23): it
+# pins benign acceptance across BOTH axes on ONE artifact, so a regression that
+# started REJECTING a benign compound on EITHER reader surface is caught loudly.
+# Go: accept — the line scanner never reads `baseline_pack.families` or `guardrails`
+#     at all (both are top-level keys that close the blocklist section), so the
+#     family reorder and the guardrail rule are invisible to it (the 18-reordered-
+#     families SHAPE class). It sees only a well-formed, non-empty blocklist with
+#     reason+rung on its single entry, and accepts.
+# Rust: accept — parse_layer stores families in a BTreeMap (order-independent by
+#     construction), so the reorder is benign, AND the guardrail rule declares a
+#     valid `class: egress` and `rung: block+log`, so the §7 (a) / D53 mandatory-rung
+#     gate is satisfied (the accept path of the 13-missing-rung-guardrail SCHEMA
+#     class). The two benign axes are INDEPENDENT: the Go-invisible axis is the
+#     family-order SHAPE, the Rust-exercised axis is the guardrail-rung SCHEMA on a
+#     GUARDRAIL rule — neither reader can mask the other's acceptance.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+baseline_pack:
+  families:
+    packages: { tier: enabled }
+    vcs: { tier: enabled }
+    core: { tier: enabled }
+guardrails:
+  - id: egress-rate-1
+    class: egress
+    rung: block+log
+blocklist:
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

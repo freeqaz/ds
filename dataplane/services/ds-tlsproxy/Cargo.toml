@@ -1,0 +1,120 @@
+[package]
+name = "ds-tlsproxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# The flush_session severing registry + the D53 rung-conditional caller live in
+# the library (offline, stdlib + workspace path-deps only). The Pingora wiring
+# lives in the bin target (src/main.rs + src/transparent.rs) per doc 12 §13.1.
+path = "src/lib.rs"
+
+[[bin]]
+name = "ds-tlsproxy"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace path-deps for the lib target (framework-agnostic; doc 12 §13.1).
+# Adding a workspace member as a path-dep adds NO new Cargo.lock package
+# (the count stays at the 8 workspace members).
+# Workspace path-deps + the ONE platform primitive crate the NFT-2 transparent
+# listener spike needs (socket2 — already in the vendored/locked set as a tokio /
+# hickory transitive, so the direct edge adds NO new Cargo.lock package; pinned +
+# vendored, builds offline with `--locked`). No pingora, no tokio, no other
+# crates.io: the registry + caller are framework-agnostic; the pingora wiring
+# point is a documented seam (doc 12 §13.1). Adding a workspace member as a
+# path-dep adds NO new Cargo.lock package (the count stays at the 8 workspace
+# members).
+#
+# socket2: the D69/§2.1 `ConnOrigin` recovery primitive (`transparent::accept`).
+#   `Socket::original_dst_v4()` / `original_dst_v6()` are the safe wrappers over
+#   the SO_ORIGINAL_DST (v4) / IP6T_SO_ORIGINAL_DST (v6) getsockopt — the EXACT
+#   kernel mechanism Pingora's stock `SocketDigest::original_dst()` performs
+#   (doc 12 §2 / §13.1). Using socket2 directly keeps the recovery module
+#   `#![forbid(unsafe_code)]`-clean (no hand-rolled getsockopt) AND offline (the
+#   pingora-core wiring is the documented seam, NOT a build dep here — pingora is
+#   not yet vendored, doc 14 §6). `features = ["all"]` gates the original_dst
+#   getters on (socket2 enables them only under `all`); the feature pulls in NO
+#   additional crate.
+#
+# ds-contracts: the FROZEN flush_session contract (FlushSession/DstFilter/DstKey/
+#   LegSelector/FlushOutcome) and the mark-space Leg type the registry keys on,
+#   plus the DNS-2b admission-map shape and the `mark::compose` upstream-leg mark
+#   the TLS-2 explicit path (src/explicit.rs) carries before connect (§4.2).
+ds-contracts = { path = "../../crates/ds-contracts" }
+# ds-admission-shm: the D131 Candidate-A survivable DNS-2b admission map (seqlock over a
+#   real POSIX-shm MAP_SHARED segment). ds-tlsproxy is the READER side: behind DS_TLS1_LIVE
+#   the FORWARD admission gate (`acquire_admission_map`) attaches a read-only
+#   `ShmAdmissionReader` to the host-wide named segment ds-dnsgate writes, by the SAME name
+#   single-sourced through `ds_contracts::dns_admission::admission_shm_name`. The crate's only
+#   deps are ds-contracts (already in this graph) + libc, so this path edge adds ZERO vendored
+#   crate; framework-agnostic, no pingora/hickory type crosses it (D40/D67). The lookup flows
+#   through the FROZEN `ds_contracts::dns_admission::AdmissionMap` trait via a thin read-only
+#   adapter, never the concrete reader type in the consumer mechanics.
+ds-admission-shm = { path = "../../crates/ds-admission-shm" }
+# policy-core: THE single shared evaluator (D63/POL-3). The TLS-2 explicit path
+#   (src/explicit.rs) routes the client-declared host through
+#   `consumer::tls_connect_decision` — the SAME engine verdict the transparent
+#   path's SNI check and the DNS admission reach (no consumer reimplements a rule).
+policy-core = { path = "../../crates/policy-core" }
+# ds-telemetry: the LOG-1 emitter CONVENTIONS crate (doc 14 §6). The lib target
+#   consumes its `QuicRejectCounter` — the D70 per-session udp/443 reject counter
+#   (doc 12 §7) — that `src/telemetry_quic.rs` instruments into the LOG-1
+#   `FlowRecord` reject path. Already a workspace member in the locked set, so this
+#   path-dep edge adds NO new Cargo.lock package; framework-agnostic (no pingora/
+#   hickory type crosses it, D40/D67).
+ds-telemetry = { path = "../../crates/ds-telemetry" }
+socket2 = { version = "0.6", features = ["all"] }
+
+# ---- TLS-3 leaf/CA crypto (lib target: src/ca.rs) ----------------------------
+# The per-session interception CA + per-origin leaf authority (D17/D82, doc 12
+# §3/§13.2) and the building blocks for strict-WebPKI re-origination. RING backend
+# (see [workspace.dependencies]) — NO aws-lc-rs cmake path. These are pingora-FREE
+# (D40 / doc 12 §13.1): src/ca.rs declares NO pingora type. Versions are pinned at
+# workspace level so they can never skew.
+rcgen = { workspace = true }
+rustls = { workspace = true }
+rustls-webpki = { workspace = true }
+rustls-pki-types = { workspace = true }
+
+# ---- TLS-5 credential-swap (lib target: src/swap.rs) -------------------------
+# zeroize: the presented short-lived credential the swap executor touches lives in
+# a `Zeroizing<Vec<u8>>` wiped on drop (never-hold-the-secret, D73). Already in the
+# locked set as a rustls/ring transitive, so this direct edge adds NO new
+# Cargo.lock package; pure-Rust, no build script, builds offline with --locked.
+# pingora-FREE (D40): src/swap.rs declares no pingora type. Pinned at workspace.
+zeroize = { workspace = true }
+
+# ---- Pingora wiring (bin target: src/main.rs) --------------------------------
+# pingora-core: transparent-listener surface (D40). default-features = false:
+#   we take only the core TCP service; TLS leaf-cert (TLS-1) and HTTP inspector
+#   (TLS-3/TLS-7) features land in later prestages.
+pingora-core = { workspace = true }
+# tokio: Pingora's own runtime is backed by tokio; we pull the same pinned major.
+# `time` is for the D68 re-resolve client's bounded `tokio::time::timeout` round-trip
+# to ds-dnsgate (T3) — a connect/read that hangs must fail closed within the budget,
+# never block a pingora worker indefinitely. Additive feature, no new crate.
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "sync", "time"] }
+# async-trait: required while Pingora's ServerApp uses #[async_trait] (pre-AFIT).
+async-trait = { workspace = true }
+
+[features]
+# test-ca: exposes src/ca.rs's self-mint interception-CA harness
+# (SessionCa::new_self_signed_for_test) outside #[cfg(test)] so LATER TLS-3 units
+# in OTHER modules of this crate (and integration tests) can construct a throwaway
+# per-session CA WITHOUT the orchestrator/Identity — the dependency-inversion seam
+# mirroring boundary CAMinter. Additive + off by default; ca.rs's own #[cfg(test)]
+# tests do not require it (they compile under plain `cargo test`).
+test-ca = []
+
+# tls3_repro: TLS-3 termination diagnostic (examples/tls3_repro.rs). Test infra,
+# not production code. Gated on `test-ca` because it self-mints a throwaway
+# session CA; an example does NOT inherit `cfg(test)`, so without the feature the
+# symbol is invisible. `required-features` makes a bare `cargo build --examples`
+# SKIP it rather than fail. Run it via examples/tls3-repro/{run,matrix}.sh, which
+# build with `--features test-ca`.
+[[example]]
+name = "tls3_repro"
+required-features = ["test-ca"]

@@ -1,0 +1,12 @@
+{
+  "_comment": "Synthetic NEGATIVE CONTROL for the inject-class twin (the deliberately weaker split claim, doc 20 §7.3): an inject-class STS session present in the VM by design — which is NOT a violation — but whose TTL bound is absent (ttl_seconds=0) AND whose ISSUED{service_id} digest is missing. The inject-class twin asserts the TTL bound + ISSUED digest, so this must FAIL with BOTH named classes inject-class-credential-ttl-unbounded and inject-class-credential-issued-digest-missing. In-VM presence itself is not flagged.",
+  "credentials": [
+    {
+      "name": "aws-sts-session",
+      "class": "inject",
+      "long_lived_on_surfaces": ["env"],
+      "ttl_seconds": 0,
+      "issued_digest": ""
+    }
+  ]
+}

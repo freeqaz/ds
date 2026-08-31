@@ -1,0 +1,18 @@
+# drift class: a blocklist entry declares an unknown `rung:` token.
+# named edge shape: unknown rung token.
+# expected verdict (go, rust) = (accept, reject)
+# Rust: BadRung — Rung::parse rejects any token outside the D53 ladder
+#     {allow+log, block+log, suspend+ask, kill+snapshot}.
+# Go: the resolver-lock scanner only checks that a `rung:` line is PRESENT (it
+#     does not validate the token), so a present-but-bogus rung extracts a
+#     non-empty entry and passes. This is the COMPLEMENT to fixture 05: the Go
+#     side polices rung PRESENCE, the Rust side polices rung VALIDITY — together
+#     they cover the field, and the corpus proves neither shape slips past BOTH.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+blocklist:
+  - domain: dns.example
+    reason: doh-resolver
+    rung: nuke+orbit
+passthrough: []

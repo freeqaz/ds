@@ -1,0 +1,52 @@
+{
+  "_comment": "Documented single source of the host-agent bridge framed-UDS wire contract (client/hostbridge/socket.go). The orchestrator single-sources its mirror of the subset both relay legs need in orchestrator/cmd/orchestrator/wire.go (the write leg drivesink_live.go and the read leg contentsource_live.go both speak it). hostbridgewire's tests assert BOTH trees' source matches these numbers so a renumber on either side goes RED. Edit this ONLY as a deliberate, coordinated wire change.",
+  "frames": {
+    "attach": 1,
+    "accept": 2,
+    "reject": 3,
+    "event": 4,
+    "input": 5,
+    "grant": 6,
+    "end": 7,
+    "resume": 8,
+    "resume_reply": 9,
+    "resume_reject": 10,
+    "mode": 11,
+    "raw_out": 12,
+    "raw_in": 13,
+    "resize": 14
+  },
+  "reject_codes": {
+    "writer_seat_taken": 1,
+    "reader_cannot_write": 2,
+    "auth_invalid": 3,
+    "handle_expired": 4,
+    "handle_malformed": 5,
+    "unknown_session": 6,
+    "internal": 7,
+    "terminal_reader_unsupported": 8
+  },
+  "resume_reject_codes": {
+    "window_exceeded": 1,
+    "internal": 2
+  },
+  "max_frame_bytes_expr": "10 << 20",
+  "role_writer": "WRITER",
+  "role_reader": "READER",
+  "transport_unix": "unix",
+  "handle_json_tags": [
+    "session_uuid",
+    "endpoints",
+    "auth",
+    "role",
+    "expires_at",
+    "transport",
+    "address",
+    "token"
+  ],
+  "drive_input_text_tag": "text",
+  "golden_frames_hex": {
+    "input_text_hi": "050000000d7b2274657874223a226869227d",
+    "reject_writer_seat_taken": "030000000101"
+  }
+}

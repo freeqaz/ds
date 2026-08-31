@@ -1,0 +1,15 @@
+# drift class: the blocklist uses a flow-style sequence on the key line.
+# named edge shape: flow-style sequence (`blocklist: [a, b]`).
+# expected verdict (go, rust) = (reject, accept)
+# Go: ErrUnsupportedShape — the hand-rolled stdlib line scanner only models
+#     block-style `- domain:` items; a flow opener on the key line would let it
+#     silently under-extract, so it fails loudly.
+# Rust: parse_layer DOES model inline `[a, b]` flow sequences, but a flow of bare
+#     scalars carries no `domain:` mapping key, so build_blocklist yields zero
+#     entries (an empty blocklist) with no PolicyError. The shapes the two
+#     readers model differ; the Go scanner is the stricter tripwire here.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+blocklist: [dns.example, dot.example]
+passthrough: []

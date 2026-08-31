@@ -1,0 +1,1 @@
+{"ds_fixture":{"provenance":"synthetic","seam":"guardrail-conformance/nftgate default-deny-outbound (doc 06 §3c, D4)","created":"2026-06-13","note":"hand-authored via-proxy allowlisted control: an allowed domain whose original-dst IP is admitted for it passes the TLS-1 (domain, IP) admission check; documentation-range address (RFC 5737), never live (D50)."}}

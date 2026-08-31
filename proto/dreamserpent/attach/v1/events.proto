@@ -1,0 +1,527 @@
+// Attach event schema — the D38 events the smart wrapper emits and
+// orchestrator.v1's WatchSession serves (doc 15 §5.3/§5.4, §6.1).
+//
+// Package home: dreamserpent.attach.v1. This file authors the SessionEvent
+// envelope and its payload union — the consolidated M0 attach-event-schema the
+// doc 15 §6.1 eight-row checklist freezes. This is the runtime-IGNORANT shape
+// (D38): no message here names a specific runtime; runtime-specific vocabulary
+// stays inside client/wrapper/adapters/ (a new runtime is a new adapter, the
+// same proto). The authoritative working model is client/wrapper/attach/
+// attach.go; this proto mirrors it field-for-field plus the §6.1 additions.
+//
+// A message or field missed at this one-shot M0 freeze is a v2-package event,
+// not a patch (proto/FREEZE.md; doc 17 §5). Every §6.1 row is implemented here
+// or in attach_handle.proto and doc-commented with its governing decision.
+//
+// §6.1 ROW MAP (this file):
+//   row 1  per-event sequence numbers on EVERY SessionEvent .......... SessionEvent.seq
+//   row 2  one-writer/N-reader shape ................................. Role lives in attach_handle.proto;
+//                                                                       this stream is what N readers receive
+//   row 3  full §3 state vocabulary incl. SUSPENDED(reason)/PARKED ... SessionState + SessionStateName + SuspendReason
+//   row 4  subagent-tree/spawn events with parent links ............. SubagentSpawned/Progress/Completed/Accounted
+//   row 5  ask-prompt/approval events; socket-hold = ask payload ..... AskRequested/AskResolved (NEVER §3 state)
+//   row 6  canvas tile fields: plan deltas; ask pending/answered ..... PlanDelta (plan half) + ask events (ask half)
+//   row 7  D78 attendedness input-activity events (slots reserved) ... InputActivity (writer-seat write event)
+//   row 9  the projection-recovery wire (the recovery mechanism for row 1's
+//          per-event seqs) lives ENTIRELY in the hostbridge local-wire's OWN
+//          number space (client/hostbridge/socket.go), an INDEPENDENT space from
+//          attach.v1's proto field numbers. The doc 15 §6.1 disambiguation rider
+//          is the normative statement; deliberately NOT restated here in this
+//          package's bodies, because scripts/check-freeze-riders.sh CHECK 4 fails
+//          closed on any attach.v1 .proto that names those local-wire symbols or
+//          cross-references them on a field allocation — so this package stays
+//          silent about that wire by construction. attach.v1 field numbers below
+//          are an ordinary 1..N proto space with no hidden meaning at any value.
+
+syntax = "proto3";
+
+package dreamserpent.attach.v1;
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/attach/v1;attachv1";
+
+// =============================================================================
+// §6.1 ROW 3 — full doc 15 §3 state vocabulary (the FROZEN M0 artifact).
+//
+// SessionStateName carries the §3 machine verbatim. doc 15 §3 is the SINGLE
+// vocabulary source (SessionEvent/ObservedSession/§6.1-row-3 cite §3, never
+// re-declare a name): PENDING, CREATING, READY, ATTACHED, WORKING, SNAPSHOTTING,
+// MIGRATING, PARKED, SUSPENDED(reason), RESUMING, DESTROYING, DESTROYED. No other
+// state name is legal at M0 (D35/D46/D72/D73/D77); adding one is a contract-set
+// change that reopens the ratifying decision, not a field add. Reserved numbers
+// 16-31 keep room for additive M0-window state vocabulary without a v2.
+// =============================================================================
+enum SessionStateName {
+  SESSION_STATE_NAME_UNSPECIFIED = 0;
+  SESSION_STATE_NAME_PENDING = 1;
+  SESSION_STATE_NAME_CREATING = 2;
+  SESSION_STATE_NAME_READY = 3;
+  SESSION_STATE_NAME_ATTACHED = 4;
+  SESSION_STATE_NAME_WORKING = 5;
+  SESSION_STATE_NAME_SNAPSHOTTING = 6;
+  SESSION_STATE_NAME_MIGRATING = 7;
+  SESSION_STATE_NAME_PARKED = 8;       // first-class PARKED (D46) — an ordinary §3 state value
+  SESSION_STATE_NAME_SUSPENDED = 9;    // carries SuspendReason (D77 narrowing)
+  SESSION_STATE_NAME_RESUMING = 10;
+  SESSION_STATE_NAME_DESTROYING = 11;
+  SESSION_STATE_NAME_DESTROYED = 12;
+  reserved 16 to 31;                   // additive M0-window state vocabulary headroom (no v2)
+}
+
+// SuspendReason is the §3 SUSPENDED(reason) enum, D77-narrowed (doc 15 §3,
+// §5.1). user | policy_breach | rebalance, with POLICY_BREACH valid ONLY for the
+// D77 genuine-threat classes and REQUIRING provenance (carried on the hypervisor
+// SuspendRequest, §5.1; surfaced read-only here as the reason a session is in
+// SUSPENDED). This is attach.v1's OWN read-only projection of the §3 reason; the
+// authoritative reason rides hypervisor.v1's SuspendRequest. The proto3/buf
+// STANDARD zero value is SUSPEND_REASON_UNSPECIFIED (the §3 names are 1..3); a
+// SUSPENDED state always carries one of USER/POLICY_BREACH/REBALANCE.
+enum SuspendReason {
+  SUSPEND_REASON_UNSPECIFIED = 0;
+  SUSPEND_REASON_USER = 1;
+  SUSPEND_REASON_POLICY_BREACH = 2;    // D77 genuine-threat classes only; provenance required upstream
+  SUSPEND_REASON_REBALANCE = 3;
+}
+
+// SessionState is emitted on a §3 transition (full transition fidelity: every §3
+// transition is representable). `reason` is a free-text refinement label (e.g.
+// "requesting", "task_open", "turn_complete" from the runtime stream); the
+// D77-narrowed SUSPENDED reason is the typed `suspend_reason`, set IFF
+// `name == SESSION_STATE_NAME_SUSPENDED`. The 30-60 s socket-hold is NOT a state
+// here (§3 refinement 4 / §6.1 row 5): it is ask-event payload, never state
+// vocabulary.
+message SessionState {
+  SessionStateName name = 1;
+  string reason = 2;                   // runtime refinement label (free taxonomy)
+  SuspendReason suspend_reason = 3;    // set IFF name == SUSPENDED (D77)
+}
+
+// =============================================================================
+// §6.1 ROW 4 — subagent-tree/spawn events with parent links (D18 per-call VM
+// hierarchy). The spawn path is golden-traced (doc 06 §2.2). Mirrors
+// client/wrapper/attach/attach.go Subagent{Spawned,Progress,Completed,Accounted}.
+// =============================================================================
+
+// SubagentSpawned is a node entering the D18 spawn tree. `parent_node_id` is the
+// parent link (empty => root); `parent_confidence` is "exact" at depth <=2,
+// "inferred" at depth >=3 (OBSERVABILITY-DESIGN §2). This is the spawn event,
+// distinct from a tool invocation — a Task* todo-family call is NEVER a spawn
+// (§6.1 row 6c; spawn is name in {Agent, Task-with-subagent_type}).
+message SubagentSpawned {
+  string node_id = 1;                  // the tool-use id
+  string task_id = 2;
+  string subagent_type = 3;
+  string description = 4;
+  string prompt_excerpt = 5;
+  string task_type = 6;
+  string parent_node_id = 7;           // parent link (empty => root) — the D18 hierarchy edge
+  string parent_confidence = 8;        // "exact" (depth<=2) | "inferred" (depth>=3)
+  string turn_group = 9;
+}
+
+// SubagentProgress is coarse liveness. `usage_raw` is a verbatim passthrough
+// flagged `uncharacterized` — no capture establishes its contents; never render
+// it as token burn. `elapsed_ms` is adapter-clock, not wire truth.
+message SubagentProgress {
+  string node_id = 1;
+  string task_id = 2;
+  string last_tool_name = 3;
+  int64 elapsed_ms = 4;
+  bytes usage_raw = 5;                 // opaque passthrough; flagged below
+  bool uncharacterized = 6;
+}
+
+// SubagentCompleted is the lifecycle terminal. Tokens are NOT sourced here —
+// accounting arrives separately on SubagentAccounted, possibly much later and in
+// completion order.
+message SubagentCompleted {
+  string node_id = 1;
+  string task_id = 2;
+  string status = 3;
+  string summary = 4;
+  string output_file = 5;
+}
+
+// Continuation is the display-only resumption hint a completed subagent
+// advertises; gated in headless runs and never presented as actionable.
+message Continuation {
+  string agent_id = 1;
+  string hint = 2;
+}
+
+// SubagentAccounted is the authoritative per-subagent accounting (the usage
+// trailer of the node's result). `returned_to` is the node the result returned
+// to (empty => root) — parent corroboration, never the primary join.
+message SubagentAccounted {
+  string node_id = 1;
+  string agent_id = 2;
+  int64 subagent_tokens = 3;
+  int64 tool_uses = 4;
+  int64 duration_ms = 5;
+  string output_excerpt = 6;
+  bool is_error = 7;
+  string returned_to = 8;              // parent corroboration (empty => root)
+  Continuation continuation = 9;
+}
+
+// =============================================================================
+// §6.1 ROW 5 — ask-prompt/approval events. SOCKET-HOLD VISIBILITY IS CARRIED AS
+// ASK-EVENT PAYLOAD, NEVER §3 STATE VOCABULARY (§3 refinement 4): the open ask
+// IS the hold; the 30-60 s hold is not a VM state. The write direction of an ask
+// is NOT a response channel — the human's choice becomes a TTL'd grant on the
+// policy stream (§6.2, D45/D53), never a second proxy-side response; the client
+// speaks attach.v1 and nothing else (it never emits a CC control_response).
+// =============================================================================
+
+// AskRequested is an approval request surfaced from the control protocol (§6.2
+// step 1/2). `tool_use_id` is the cross-record attach.v1 correlation key;
+// `request_id` is the control-channel answer key — both needed, kept DISTINCT
+// (DRIVE-FINDINGS §6). `held` makes the socket-hold VISIBLE as ask payload (the
+// open ask is the hold). `source` is "control" | "prompt-tool" | "rearm";
+// `pending` is true when re-armed from the pending-requests list of a re-attach.
+// The wrapper NEVER answers asks itself (D18/D45/D53).
+message AskRequested {
+  string tool_use_id = 1;              // attach.v1 correlation key
+  string request_id = 2;               // control-channel answer key (kept distinct)
+  string node_id = 3;                  // alias of tool_use_id at the event node level
+  string tool_name = 4;
+  bytes input = 5;                     // opaque tool input JSON
+  bytes suggestions = 6;               // native permission_suggestions[] (native channel only)
+  string agent_id = 7;
+  string source = 8;                   // "control" | "prompt-tool" | "rearm"
+  bool pending = 9;                    // re-armed from a re-attach handshake
+  bool held = 10;                      // the held-open-ask visibility — AS ASK PAYLOAD, never §3 state (refinement 4)
+}
+
+// AskResolved closes an ask. `behavior` is "allow" | "deny" | "cancelled";
+// `classification` is user_temporary | user_permanent | user_reject when known
+// (§6.2 step 3 option set). `behavior:"cancelled"` is engine-only (dialog
+// timeout), unreachable from a human grant. The resolution is the READ-direction
+// projection of the §6.2 grant outcome — the grant itself is a policy-stream
+// artifact, not carried here.
+message AskResolved {
+  string tool_use_id = 1;
+  string request_id = 2;
+  string node_id = 3;
+  string behavior = 4;                 // "allow" | "deny" | "cancelled"
+  string classification = 5;           // user_temporary | user_permanent | user_reject
+  string message = 6;
+}
+
+// =============================================================================
+// §6.1 ROW 6 — canvas tile fields. ASK HALF OWNED (the AskRequested/AskResolved
+// pair above is the open-vs-resolved control_request doc 17 §5 renders read-only).
+// PLAN HALF — shape SPECIFIED, provenance `documented, not-live-verified` (the
+// keystone 01KTXBG14J did not drive a plan turn). The freeze RESERVES the plan
+// shape and WAIVES live verification per the §6.1 row-6 status cell: the plan
+// half closes with a keystone plan-drive turn (a future additive verification,
+// no v2). Projection is read-only by construction (doc 17 §5 / D61 / D86 — the
+// canvas is never a second writer); plan bodies are platform-truth, arrangement
+// is canvas-truth.
+// =============================================================================
+
+// PlanDeltaKind classifies the three runtime tool-use blocks the plan delta is
+// sourced from, by `name` exactly as the read adapter classifies (PHASE3 P14):
+// EXIT_PLAN_MODE (a plan-mode->ask handoff), TODO_WRITE (full-list replacement),
+// TASK_OP (the Task* structured todo family — NEVER a subagent spawn, §6.1 row 6c).
+enum PlanDeltaKind {
+  PLAN_DELTA_KIND_UNSPECIFIED = 0;
+  PLAN_DELTA_KIND_EXIT_PLAN_MODE = 1;  // input:{plan} — raises a §6.2 ask; approval_state joins that ask
+  PLAN_DELTA_KIND_TODO_WRITE = 2;      // input:{todos[]} — full-list replacement (delta = diff vs last list)
+  PLAN_DELTA_KIND_TASK_OP = 3;         // Task*/TaskCreate/... structured todo set — NEVER a spawn
+}
+
+// PlanApprovalState is the EXIT_PLAN_MODE-only read-only plan-tile state, keyed
+// on the ask's tool_use_id and JOINED to the §6.2 ask (the human approves the
+// plan AS a §6.2 ask, never a separate accept channel). UNSPECIFIED for the
+// non-ExitPlanMode kinds.
+enum PlanApprovalState {
+  PLAN_APPROVAL_STATE_UNSPECIFIED = 0;
+  PLAN_APPROVAL_STATE_PROPOSED = 1;
+  PLAN_APPROVAL_STATE_APPROVED = 2;
+  PLAN_APPROVAL_STATE_REJECTED = 3;
+}
+
+// TodoItem is one TODO_WRITE list entry. The full list is replaced each call;
+// the delta is the diff against the last list (the canvas plan/todo card).
+message TodoItem {
+  string content = 1;
+  string status = 2;                   // "pending" | "in_progress" | "completed"
+  string active_form = 3;
+  string id = 4;
+}
+
+// PlanDelta is the §6.1 row-6 plan-half event class:
+//   {tool_use_id, kind, plan?, todos?, approval_state? (ExitPlanMode only), seq}
+// PROVENANCE: documented, not-live-verified — the shape is frozen (reserved), the
+// live verification is WAIVED at this M0 freeze and closes with a keystone
+// plan-drive turn (additive, no v2). The per-event seq is on the SessionEvent
+// envelope (row 1), not duplicated here.
+message PlanDelta {
+  string tool_use_id = 1;
+  PlanDeltaKind kind = 2;
+  string plan = 3;                     // EXIT_PLAN_MODE only — the plan body (platform-truth)
+  repeated TodoItem todos = 4;         // TODO_WRITE / TASK_OP — full-list replacement
+  PlanApprovalState approval_state = 5; // EXIT_PLAN_MODE only — joined to the §6.2 ask
+}
+
+// =============================================================================
+// §6.1 ROW 7 — D78 attendedness input-activity events. SLOT/FIELD NUMBERS
+// RESERVED AT THE FREEZE; THE EVENT TAXONOMY STAYS FREE until the events land
+// (M0/M1 interim is writer-attached-only, §5.5). The writer-seat write event
+// SHAPE is SPECIFIED: the CC input frame it derives from is LIVE (keystone
+// 01KTXBG14J, DRIVE-FINDINGS §2/§3); the attach.v1 input_activity PROJECTION and
+// the writer_seat_id/at binding are `documented, not-live-verified` (no live
+// writer-seat arbitration was driven). The event carries NO input payload by
+// default (D78 needs only "a human on the writer seat produced input within
+// T min", §5.5; the body stays on the drive channel) — payload-bearing variants
+// stay free taxonomy.
+// =============================================================================
+
+// InputActivityKind is the input block union the activity event is classified
+// from (from the CC stream-json input frame's content blocks): text | tool_result
+// | image | multi_block. RESERVED-but-free: new kinds are additive (the taxonomy
+// stays free until the events land); reserved numbers 8-15 keep headroom.
+enum InputActivityKind {
+  INPUT_ACTIVITY_KIND_UNSPECIFIED = 0;
+  INPUT_ACTIVITY_KIND_TEXT = 1;
+  INPUT_ACTIVITY_KIND_TOOL_RESULT = 2;
+  INPUT_ACTIVITY_KIND_IMAGE = 3;
+  INPUT_ACTIVITY_KIND_MULTI_BLOCK = 4;
+  reserved 8 to 15;                    // free-taxonomy headroom (the events have not landed)
+}
+
+// InputActivity is the writer-seat write event the orchestrator's D78
+// computation consumes: {session_uuid, writer_seat_id, at, kind, seq}. `at` is
+// the server-stamped freshness clock (§5.5/D78). No input *payload* by default.
+// PROVENANCE: the underlying CC input frame is LIVE; this projection +
+// writer_seat_id/at binding is documented-not-live-verified (the slots are
+// reserved now; the taxonomy is free until the events land).
+message InputActivity {
+  string session_uuid = 1;
+  string writer_seat_id = 2;           // the D61 writer seat the input came from
+  uint64 at = 3;                       // server-stamped freshness clock (§5.5/D78), unix seconds
+  InputActivityKind kind = 4;          // from the input block union (free taxonomy)
+  reserved 8 to 15;                    // payload-bearing variant headroom (stays free)
+}
+
+// =============================================================================
+// WRITER-SEAT HANDOFF READ EVENT (D61/D137/D138, sessions/10 §3/§6 W2). The D61
+// one-writer/N-reader seat lives in the SESSION RECORD (doc 15 §5.4); a
+// grant/steal/yield is an ATTRIBUTED record mutation the orchestrator arbitrates
+// at the single WatchSession terminator. This is the ADDITIVE read-leg projection
+// of that mutation so EVERY N-reader OBSERVES the handoff on the read stream at
+// the seq the seat changed hands (a steal CANNOT be silent — the D61/D137
+// invariant). The seq this event is published at IS the WriterSeatGrant.granted_seq
+// (write leg, writer_relay.proto) returned to the new driver and the
+// YieldWriterSeatResponse.released_seq returned on a yield. The input *body* of a
+// drive frame never appears here (that rides DriveSession.DriveInput.payload, the
+// write leg); this carries ONLY who-took-the-seat-from-whom, attributed.
+// =============================================================================
+
+// WriterSeatChangeKind classifies a seat handoff (sessions/10 §3, D138). GRANT is
+// taking a FREE seat (no prior driver); STEAL is a takeover from a live holder
+// (policy-gated when the holder is ATTENDED, D138 default-refuse); YIELD is the
+// cooperative release of the seat back to free. The proto3/buf STANDARD zero value
+// is WRITER_SEAT_CHANGE_KIND_UNSPECIFIED; new kinds are additive (reserved tail).
+enum WriterSeatChangeKind {
+  WRITER_SEAT_CHANGE_KIND_UNSPECIFIED = 0;
+  WRITER_SEAT_CHANGE_KIND_GRANT = 1;   // a free seat was granted to a driver
+  WRITER_SEAT_CHANGE_KIND_STEAL = 2;   // a takeover from a prior holder (policy-gated when attended, D138)
+  WRITER_SEAT_CHANGE_KIND_YIELD = 3;   // the cooperative release of the seat (seat goes free)
+  reserved 8 to 15;                    // additive handoff-kind headroom (no v2)
+}
+
+// WriterSeatChange is the read-leg projection of a D61 writer-seat handoff
+// (sessions/10 §3/§6 W2): {writer_seat_id, driver_identity, prev_driver_identity,
+// kind, ...}. `writer_seat_id` is the seat token now live (empty on a YIELD — the
+// seat went free); `driver_identity` is the D8/D55-attributed new holder (empty on
+// a YIELD); `prev_driver_identity` is who the seat was taken/released FROM (empty
+// on a first GRANT of a never-held seat). `kind` discriminates GRANT/STEAL/YIELD.
+// `expires_at` mirrors the short-lived seat TTL (unix seconds; 0 on a YIELD) so a
+// spectator sees when the grant lapses (D39). The per-event seq is on the
+// SessionEvent envelope (row 1), and THAT seq is the granted_seq / released_seq
+// the write leg returns — so the write-side caller and every read-side spectator
+// agree on the one ordering point the seat changed hands at.
+message WriterSeatChange {
+  string writer_seat_id = 1;        // the seat now live (empty on YIELD — the seat went free)
+  string driver_identity = 2;       // D8/D55-attributed new holder (empty on YIELD)
+  string prev_driver_identity = 3;  // who the seat was taken/released FROM (empty on a first GRANT)
+  WriterSeatChangeKind kind = 4;    // GRANT | STEAL | YIELD
+  uint64 expires_at = 5;            // unix seconds; short-lived seat TTL (0 on YIELD), D39
+  reserved 8 to 15;                 // additive seat-change-metadata headroom (no v2)
+}
+
+// =============================================================================
+// Mirror of the runtime-observable payloads (client/wrapper/attach/attach.go):
+// session init / chat / tool-use, projected runtime-ignorantly (D38). These are
+// the events WatchSession fans out alongside the §6.1 rows above.
+// =============================================================================
+
+// SessionInit is the attach-time snapshot of the runtime's session config.
+message SessionInit {
+  string runtime_version = 1;
+  string model = 2;
+  string cwd = 3;
+  string permission_mode = 4;
+  string api_key_source = 5;
+  repeated string tools = 6;
+  repeated string agent_types = 7;
+  repeated string skills = 8;
+  repeated string slash_commands = 9;
+  bytes mcp_servers = 10;              // opaque JSON
+  string output_style = 11;
+}
+
+// ChatBlock is one content block of a chat message. `kind` is "text" or "thinking".
+message ChatBlock {
+  string kind = 1;
+  string text = 2;
+}
+
+// ChatMessage is one event per non-partial assistant stream line; consumers
+// merge by message_id (P11: the non-partial record is authoritative).
+message ChatMessage {
+  string message_id = 1;
+  string role = 2;
+  string parent_node_id = 3;           // empty => root
+  repeated ChatBlock blocks = 4;
+}
+
+// ChatDelta is a LIVE, PRE-FINAL refinement of a chat message still being
+// streamed (--include-partial-messages, P11). It is RENDER-ONLY: the
+// authoritative content is the non-partial ChatMessage that arrives at turn end
+// (merge by message_id). A consumer that ignores ChatDelta loses nothing but
+// the typing animation — the ChatMessage that follows is the source of truth.
+// Runtime-IGNORANT (D38): a generic typing-delta, never names a runtime (the
+// CC stream_event shapes stay inside client/wrapper/adapters/claude-code/).
+message ChatDelta {
+  string message_id = 1;               // joins this delta to the ChatMessage that finalizes it
+  string parent_node_id = 2;           // empty => root (subagent threading; mirrors ChatMessage)
+  int32 block_index = 3;               // the content block this delta extends (per-message index, P10)
+  string kind = 4;                     // "text" | "thinking"
+  string text = 5;                     // the coalesced delta text for this content_block_delta
+  bool final = 6;                      // true on content_block_stop: this block is complete
+  reserved 7 to 15;                    // additive headroom (no v2)
+}
+
+// ToolInvoked is a tool-use start. NOT emitted for subagent spawns (those are
+// SubagentSpawned). `kind` is "native" | "mcp" | "skill" (P14).
+message ToolInvoked {
+  string node_id = 1;                  // the tool-use id
+  string name = 2;
+  string kind = 3;
+  string server = 4;
+  string tool = 5;
+  string skill = 6;
+  string parent_node_id = 7;
+  string turn_group = 8;
+  bytes input = 9;                     // opaque tool input JSON
+}
+
+// ToolCompleted is the matching completion. `denial_message` is set when this
+// completion is a permission denial (the is_error bare-string body, P13/P8).
+message ToolCompleted {
+  string node_id = 1;
+  bool is_error = 2;
+  string output_excerpt = 3;           // first text block, <=256 runes
+  string denial_message = 4;
+}
+
+// QuotaUpdated is a passthrough of the wire rate-limit fields. `semantics` is
+// always "provisional" (P18 open: behavior under load unfixed).
+message QuotaUpdated {
+  string rate_limit_type = 1;
+  string status = 2;
+  bytes resets_at = 3;                 // opaque (wire shape varies)
+  bool is_using_overage = 4;
+  string overage_status = 5;
+  string overage_disabled_reason = 6;
+  string semantics = 7;                // always "provisional"
+}
+
+// SessionAccounted is the terminal accounting event. `outcome` is the closed set
+// {success, error_during_execution, error_max_turns, error_max_budget_usd,
+// error_max_structured_output_retries} (P13). `terminal_reason` is optional —
+// absent on the budget terminal; NEVER derived from a stop reason (P9).
+message SessionAccounted {
+  string outcome = 1;
+  bool is_error = 2;
+  int64 num_turns = 3;
+  int64 duration_ms = 4;
+  double total_cost_usd = 5;
+  string terminal_reason = 6;
+  repeated string errors = 7;
+  bytes usage = 8;                     // opaque JSON
+  bytes model_usage = 9;               // opaque JSON
+  int64 denial_count = 10;
+}
+
+// =============================================================================
+// §6.1 ROW 1 — SessionEvent envelope, PER-EVENT SEQUENCE NUMBERS ON EVERY EVENT
+// (D79; reserved from M0). `seq` is the monotonic key a slow N-reader (D61)
+// recovers by, WITHOUT re-attaching. The recovery MECHANISM itself lives in the
+// hostbridge local-wire's own number space (doc 15 §6.1 row 9 / the §6.1
+// disambiguation rider) — deliberately NOT named or restated in this package's
+// bodies; this proto only commits to carrying `seq` (row 1 ⟷ row 9 freeze
+// together-or-not-at-all, D79/D61). Exactly one payload field is set, matching
+// `type`.
+// =============================================================================
+
+// EventType discriminates the payload union (1:1 with the set payload field).
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_SESSION_INIT = 1;
+  EVENT_TYPE_SESSION_STATE = 2;
+  EVENT_TYPE_CHAT_MESSAGE = 3;
+  EVENT_TYPE_TOOL_INVOKED = 4;
+  EVENT_TYPE_TOOL_COMPLETED = 5;
+  EVENT_TYPE_SUBAGENT_SPAWNED = 6;
+  EVENT_TYPE_SUBAGENT_PROGRESS = 7;
+  EVENT_TYPE_SUBAGENT_COMPLETED = 8;
+  EVENT_TYPE_SUBAGENT_ACCOUNTED = 9;
+  EVENT_TYPE_ASK_REQUESTED = 10;
+  EVENT_TYPE_ASK_RESOLVED = 11;
+  EVENT_TYPE_QUOTA_UPDATED = 12;
+  EVENT_TYPE_SESSION_ACCOUNTED = 13;
+  EVENT_TYPE_PLAN_DELTA = 14;          // §6.1 row 6 (plan half; provenance waived)
+  EVENT_TYPE_INPUT_ACTIVITY = 15;      // §6.1 row 7 (slots reserved; taxonomy free)
+  EVENT_TYPE_WRITER_SEAT_CHANGED = 16; // D61/D137/D138 writer-seat handoff (W2 additive read event)
+  EVENT_TYPE_CHAT_DELTA = 17;          // D145 live streaming-text typing delta (U-CHATDELTA, render-only, P11)
+}
+
+// SessionEvent is the WatchSession envelope. `seq` (row 1) is on EVERY event.
+// The payload union (oneof) holds exactly one of the event bodies above; `type`
+// is the redundant discriminator a non-oneof-aware consumer can switch on
+// without decoding the body.
+//
+// The field numbers below are an ORDINARY proto 1..N space with no hidden
+// meaning at any value (per the doc 15 §6.1 row-9 rider, this package neither
+// names nor reserves the recovery wire's local-wire tags; CHECK 4 of
+// check-freeze-riders.sh keeps that true).
+message SessionEvent {
+  uint64 seq = 1;                      // ROW 1 — per-event sequence number on EVERY event (D79)
+  string session_id = 2;
+  uint64 observed_at = 3;              // adapter clock (deterministic in replay), unix millis
+  EventType type = 4;
+  repeated string source = 5;          // runtime record uuids this was projected from
+
+  oneof payload {
+    SessionInit session_init = 6;
+    SessionState session_state = 7;
+    ChatMessage chat_message = 8;
+    ToolInvoked tool_invoked = 9;
+    ToolCompleted tool_completed = 10;
+    SubagentSpawned subagent_spawned = 11;
+    SubagentProgress subagent_progress = 12;
+    SubagentCompleted subagent_completed = 13;
+    SubagentAccounted subagent_accounted = 14;
+    AskRequested ask_requested = 15;
+    AskResolved ask_resolved = 16;
+    QuotaUpdated quota_updated = 17;
+    SessionAccounted session_accounted = 18;
+    PlanDelta plan_delta = 19;         // ROW 6 (plan half)
+    InputActivity input_activity = 20; // ROW 7
+    WriterSeatChange writer_seat_change = 21; // D61/D137/D138 writer-seat handoff (W2 additive read event)
+    ChatDelta chat_delta = 22;         // D145 live streaming-text typing delta (U-CHATDELTA, render-only)
+  }
+}

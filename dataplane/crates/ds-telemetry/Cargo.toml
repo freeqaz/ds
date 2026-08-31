@@ -1,0 +1,32 @@
+[package]
+name = "ds-telemetry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The CONVENTIONS layer of the LOG-1 emitter (doc 14 §6/§12.4). Two real deps,
+# both already in the workspace — no NEW vendored crate is pulled (see Cargo.lock:
+# the only delta is these two already-present edges):
+#
+#   ds-contracts (path) — consumed READ-ONLY for the D75 family-agnostic
+#     `AddressFamily` contract shape (doc 14 §3 `dns_admission::AddressFamily`).
+#     No framework type ever crosses this seam (D67/D40); we take the enum only.
+#   tokio 1.x (pinned workspace major, doc 14 §6) — the async runtime the
+#     disk-bounded spool client (LOG-3) runs on. Minimal features: an `fs`/`io`/
+#     `sync` spool with a background flush needs the multi-thread/current-thread
+#     runtime, async file I/O, the `sync` primitives for the bounded queue, and
+#     `time` for batch flush ticks. NO `net` — this crate never opens a socket;
+#     the off-box transport into ds-flowlog is a later seam (doc 14 §12.4).
+ds-contracts = { path = "../ds-contracts" }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "fs", "io-util", "sync", "time", "macros"] }
+
+[dev-dependencies]
+# The (c)-suite canary test drives the async spool from a runtime; `macros` +
+# `rt` give it `#[tokio::test]`. Already-present features, zero new vendored crate.
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "fs", "io-util", "sync", "time", "macros"] }
+# The NFT-5 flow_spool integration test composes the D76 mark it asserts flow
+# records carry directly from the frozen constants (already a normal dep; listed
+# here so the separate integration-test crate links it too). Read-only.
+ds-contracts = { path = "../ds-contracts" }

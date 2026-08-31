@@ -1,0 +1,34 @@
+# Codegen targets (buf v2 config format). Runs only from freeze PRs onward —
+# there are no .proto bodies at skeleton time, so this file is inert until then.
+#
+# Two targets, one pipeline (doc 15 §5.6, doc 14 §6):
+#   Go   -> proto/gen/go            (module github.com/dream-serpent/dream-serpent/proto/gen/go;
+#                                    the ONLY Go module other trees import across seams)
+#   Rust -> dataplane/crates/ds-contracts/src/gen  (generated protos live beside the
+#                                    non-proto contract constants; no hickory/pingora
+#                                    types may cross ds-contracts)
+#
+# Generated PROGRAMMABLE FAKES ship from this same pipeline, FIRST (doc 05 OQ3) —
+# the fake-generation plugin/step is wired by assurance/contract-harness/.
+#
+# Plugin pins (recorded here, installed by CI, NOT vendored at skeleton time):
+#   protoc-gen-go        v1.36.5 EXACT (committed gen stamps it; v1.36.6 changed
+#                        descriptor embedding — patch skew alone trips the drift
+#                        gate; bump only with a full committed regen, see
+#                        .github/workflows/contracts.yml)
+#   protoc-gen-go-grpc   v1.5.x
+#   prost / tonic build  via prost-build 0.13.x / tonic-build 0.12.x (pinned with the
+#                        dataplane workspace's one tokio major — see dataplane/Cargo.toml)
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: gen/go
+    opt:
+      - module=github.com/dream-serpent/dream-serpent/proto/gen/go
+  - local: protoc-gen-go-grpc
+    out: gen/go
+    opt:
+      - module=github.com/dream-serpent/dream-serpent/proto/gen/go
+  # Rust generation runs via prost-build/tonic-build from the ds-contracts build
+  # script (cargo-native), not a buf plugin — kept here as the canonical record of
+  # the second target so the two cannot drift silently (contracts.yml drift check).

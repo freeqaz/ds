@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# actionlint configuration — the SINGLE SOURCE for this repo's self-hosted
+# runner label allowlist.
+#
+# WHY THIS FILE EXISTS
+#   actionlint's runner-label rule rejects any custom self-hosted label it does
+#   not know ("label \"debian\" is unknown"). This tree's self-hosted jobs use
+#   exactly two custom labels — `debian` and `virtual-metal` — so without an
+#   allowlist every self-hosted `runs-on:` in .github/workflows/ fails closed.
+#
+#   The allowlist used to live INLINE in scripts/check-actionlint.sh (written to
+#   a mktemp config at run time) with a prose maintenance note. That made the
+#   list invisible to anyone running `actionlint` directly: the bare tool found
+#   no config and flagged every self-hosted job, while the gate script passed —
+#   local-red / gate-green drift. actionlint reads `.github/actionlint.yaml`
+#   automatically when invoked inside the repo, so tracking the list HERE makes
+#   the script and a direct `actionlint` invocation agree by construction.
+#
+# MAINTENANCE (enforced, not advisory)
+#   Adding a NEW self-hosted runner label to any .github/workflows/*.yml file
+#   requires adding it here too. scripts/check-actionlint.sh reconciles every
+#   `runs-on:` label in the workflow surface against this list and FAILS CLOSED
+#   on an unknown one — and that reconciliation runs even on hosts where the
+#   actionlint binary is absent, so the maintenance note above can no longer be
+#   quietly ignored.
+#
+#   Every base-tree `runs-on:` is one of [self-hosted, debian],
+#   [self-hosted, virtual-metal], or ubuntu-latest.
+self-hosted-runner:
+  labels:
+    - debian
+    - virtual-metal

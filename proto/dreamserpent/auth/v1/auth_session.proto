@@ -1,0 +1,218 @@
+// dreamserpent.auth.v1 — Auth SDK contract (D129; doc 23 §9).
+//
+// STATUS: OPEN — not yet frozen. Freeze PR ships bodies + baselines + generated
+// fakes in one atomic commit per proto/FREEZE.md and doc 14 §7.
+//
+// This package owns the human-principal authentication entry point for both
+// SAML 2.0 and OIDC/OAuth2 flows (D123/D124) and the sub-token derivation
+// service consumed by the orchestrator fan-out path (D126).
+//
+// Imports dreamserpent.boundary.v1 (frozen Stage-0; the SessionRef message is
+// the SHARED canonical identifier across all dream-serpent wire contracts).
+syntax = "proto3";
+
+package dreamserpent.auth.v1;
+
+import "dreamserpent/boundary/v1/session_ref.proto";
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/auth/v1;authv1";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AuthSessionService — human-principal authentication (D123, D124, D125).
+//
+// Single entry point for both SAML 2.0 (D124) and OIDC/OAuth2 (D55/D123)
+// flows. Callers receive an AuthTokenResponse containing a user auth token
+// (D125 short-lived JWT) regardless of which IdP protocol was used.
+//
+// SYNC semantics: every RPC in this service is synchronous request/response.
+// Latency budget: InitiateSAML / InitiateOIDC < 50ms (metadata cached);
+// CompleteSAML / CompleteOIDC < 200ms (token validation + DB write).
+// ─────────────────────────────────────────────────────────────────────────────
+service AuthSessionService {
+  // InitiateOIDC returns the authorization redirect URL (web: authz-code + PKCE)
+  // or a device-code response (CLI: device-code flow) for the given org/IdP config.
+  rpc InitiateOIDC(InitiateOIDCRequest) returns (InitiateOIDCResponse);
+
+  // CompleteOIDC exchanges the authorization code (web) or polls the device-code
+  // token endpoint (CLI) and issues a user auth token on success.
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  rpc CompleteOIDC(CompleteOIDCRequest) returns (AuthTokenResponse);
+
+  // InitiateSAML returns a signed AuthnRequest payload for the SP-initiated
+  // HTTP-POST binding flow (D124).
+  rpc InitiateSAML(InitiateSAMLRequest) returns (InitiateSAMLResponse);
+
+  // CompleteSAML validates the IdP SAMLResponse and issues a user auth token.
+  // Called by the ACS endpoint handler (/auth/saml/acs POST).
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  rpc CompleteSAML(CompleteSAMLRequest) returns (AuthTokenResponse);
+
+  // RevokeToken revokes a user auth token by jti and cascades revocation to
+  // all sub-tokens derived from it (D126 lineage chain).
+  // Also emits auth.token.revoked to the ds-telemetry EventSink (D128).
+  rpc RevokeToken(RevokeTokenRequest) returns (RevokeTokenResponse);
+}
+
+// ─── OIDC initiation ─────────────────────────────────────────────────────────
+
+message InitiateOIDCRequest {
+  // Org whose IdP config to use. Must match a registered IdPConfig with
+  // protocol = oidc.
+  string org_id = 1;
+
+  // Flow type selects the OAuth2 grant.
+  OIDCFlowType flow_type = 2;
+
+  // redirect_uri is required for AUTHORIZATION_CODE flows (web client).
+  // Must exactly match a registered redirect URI in the IdP application config.
+  string redirect_uri = 3;
+
+  // Reserved for token-lineage block (D104 pattern).
+  reserved 16, 17, 18, 19;
+}
+
+enum OIDCFlowType {
+  OIDC_FLOW_TYPE_UNSPECIFIED = 0;
+  OIDC_FLOW_TYPE_AUTHORIZATION_CODE = 1;  // web client: authz-code + PKCE
+  OIDC_FLOW_TYPE_DEVICE_CODE = 2;         // CLI: RFC 8628 device-code flow
+}
+
+message InitiateOIDCResponse {
+  oneof response {
+    // Set for AUTHORIZATION_CODE: the URL the browser should be redirected to.
+    AuthorizationCodeChallenge authorization_code = 1;
+    // Set for DEVICE_CODE: the device authorization response.
+    DeviceCodeChallenge device_code = 2;
+  }
+
+  // Reserved for token-lineage block (D104 pattern).
+  reserved 16, 17, 18, 19;
+}
+
+message AuthorizationCodeChallenge {
+  // Full authorization URL including code_challenge (S256) and state.
+  string authorization_url = 1;
+  // Opaque state token (signed, short-lived; CSRF guard).
+  string state = 2;
+}
+
+message DeviceCodeChallenge {
+  string device_code = 1;
+  string user_code = 2;
+  string verification_uri = 3;
+  int32 expires_in = 4;
+  int32 interval = 5;  // polling interval in seconds
+}
+
+// ─── OIDC completion ─────────────────────────────────────────────────────────
+
+message CompleteOIDCRequest {
+  string org_id = 1;
+
+  oneof completion {
+    // AUTHORIZATION_CODE: the code returned by the IdP redirect.
+    AuthorizationCodeCompletion authorization_code = 2;
+    // DEVICE_CODE: the device_code from InitiateOIDCResponse; server polls IdP.
+    string device_code = 3;
+  }
+
+  // The session_ref to bind the user auth token to. Created by the caller
+  // (usually the web handler or CLI) before calling CompleteOIDC.
+  dreamserpent.boundary.v1.SessionRef session_ref = 4;
+
+  // Reserved for token-lineage block (D104 pattern).
+  reserved 16, 17, 18, 19;
+}
+
+message AuthorizationCodeCompletion {
+  string code = 1;
+  string state = 2;         // must match the state from InitiateOIDCResponse
+  string code_verifier = 3; // PKCE code verifier (client-side generated)
+  string redirect_uri = 4;  // must match the redirect_uri from InitiateOIDCRequest
+}
+
+// ─── SAML initiation ─────────────────────────────────────────────────────────
+
+message InitiateSAMLRequest {
+  // Org whose IdP config to use. Must match a registered IdPConfig with
+  // protocol = saml.
+  string org_id = 1;
+
+  // The ACS URL the IdP should POST the SAMLResponse to. Must match the SP
+  // metadata registered with the IdP.
+  string acs_url = 2;
+
+  // Reserved for token-lineage block (D104 pattern).
+  reserved 16, 17, 18, 19;
+}
+
+message InitiateSAMLResponse {
+  // The signed AuthnRequest XML, base64-encoded (for HTTP-POST binding).
+  bytes authn_request_b64 = 1;
+  // The IdP SSO URL to POST the AuthnRequest to.
+  string idp_sso_url = 2;
+  // Relay state (signed nonce; CSRF + correlation token).
+  string relay_state = 3;
+
+  // Reserved for token-lineage block (D104 pattern).
+  reserved 16, 17, 18, 19;
+}
+
+// ─── SAML completion ─────────────────────────────────────────────────────────
+
+message CompleteSAMLRequest {
+  // The SAMLResponse, base64-encoded (from the IdP HTTP-POST to the ACS endpoint).
+  bytes saml_response_b64 = 1;
+  // The relay_state echoed by the IdP; verified against the issued nonce.
+  string relay_state = 2;
+
+  // The session_ref to bind the user auth token to.
+  dreamserpent.boundary.v1.SessionRef session_ref = 3;
+
+  // Reserved for token-lineage block (D104 pattern).
+  reserved 16, 17, 18, 19;
+}
+
+// ─── Shared auth token response ──────────────────────────────────────────────
+
+// AuthTokenResponse is returned by CompleteOIDC and CompleteSAML on success.
+message AuthTokenResponse {
+  // The user auth token (D125): a short-lived session-bound JWT.
+  // Clients present this to the platform control plane; never to agent services.
+  string user_auth_token = 1;
+
+  // The session this token is bound to.
+  dreamserpent.boundary.v1.SessionRef session_ref = 2;
+
+  // Expiry as a UNIX timestamp (seconds). Matches the JWT exp claim.
+  int64 expires_at_unix = 3;
+
+  // Scopes granted to this token (D127 scope strings, e.g. "v1:code:read").
+  repeated string scopes = 4;
+
+  // Reserved for token-lineage block (D104 pattern).
+  reserved 16, 17, 18, 19;
+}
+
+// ─── Revocation ──────────────────────────────────────────────────────────────
+
+message RevokeTokenRequest {
+  // jti of the user auth token to revoke.
+  string jti = 1;
+
+  // Human-readable reason, included in the auth.token.revoked event (D128).
+  string reason = 2;
+
+  // Reserved for token-lineage block (D104 pattern).
+  reserved 16, 17, 18, 19;
+}
+
+message RevokeTokenResponse {
+  // Number of sub-tokens (derived tokens) that were cascade-revoked (D126).
+  int32 cascade_revoked_count = 1;
+
+  // Reserved for token-lineage block (D104 pattern).
+  reserved 16, 17, 18, 19;
+}

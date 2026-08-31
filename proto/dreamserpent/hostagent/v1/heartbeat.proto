@@ -1,0 +1,219 @@
+// The host agent -> orchestrator reporting seam (doc 15 §5.2).
+//
+// A streaming heartbeat carries observed state, `applied_seq`, capacity, and
+// per-session samples UP; the same seam carries the session-lifecycle data feed
+// host-ward (digest ack relay, D22 grants, D78 attendedness — the D72-exempt
+// class). Orchestrator <-> host agent is the contract harness's FIRST real seam
+// (doc 15 §11, doc 06 §2.1).
+//
+// SHAPE freezes at M0; FIELD VALUES are rig-tuned (cadence strawman 5 s; 3
+// missed beats => host presumed unreachable, sessions marked UNKNOWN, never
+// auto-destroyed) — values are never frozen here (doc 15 §10). M0 freeze package
+// (FREEZE.md `dreamserpent.hostagent.v1` row): bodies + baseline + flip land
+// together; a slot missed at this one-shot freeze is a v2-package event. The
+// package imports — never redefines — `hypervisor.v1.ObservedSession`
+// (the shared observed-state element), so it freezes as one wave with or AFTER
+// hypervisor.v1.
+syntax = "proto3";
+
+package dreamserpent.hostagent.v1;
+
+// ObservedSession is the SHARED observed-state element owned by
+// dreamserpent.hypervisor.v1 (RecoverSessions and this heartbeat both carry it,
+// doc 15 §5.1/§5.2) — imported, never re-declared, so the reconciler reads one
+// shape across restart re-adoption and steady-state heartbeat.
+import "dreamserpent/hypervisor/v1/driver.proto";
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/hostagent/v1;hostagentv1";
+
+// HostAgentService is the host-agent reporting seam (doc 15 §5.2). The host agent
+// streams Heartbeat UP; the orchestrator reconciler consumes it. Cadence and
+// staleness are rig-tuned values, never frozen (doc 15 §10). The RPC takes a
+// `<Verb>Request` / returns a `<Verb>Response` per buf STANDARD; the streamed
+// request WRAPS the Heartbeat (so the meaningful message name is preserved while
+// the stream frame stays additive-extensible).
+service HostAgentService {
+  // ReportHeartbeat is the client-streaming heartbeat: the host agent opens one
+  // long-lived stream and emits a ReportHeartbeatRequest (carrying one Heartbeat)
+  // per cadence interval. The response is returned when the stream closes
+  // (graceful host drain) — steady-state observed state rides the stream, not the
+  // response.
+  rpc ReportHeartbeat(stream ReportHeartbeatRequest) returns (ReportHeartbeatResponse);
+}
+
+// ReportHeartbeatRequest is one streamed heartbeat frame (the buf-STANDARD
+// per-RPC request wrapper, doc 15 §5.2). It carries exactly one Heartbeat; the
+// wrapper keeps the stream frame additive-extensible (it can grow optional
+// per-frame fields post-freeze without a v2).
+message ReportHeartbeatRequest {
+  Heartbeat heartbeat = 1;
+}
+
+// Heartbeat is one streamed host report (doc 15 §5.2). The cadence strawman is
+// 5 s (free); 3 missed beats => host presumed unreachable, its sessions marked
+// UNKNOWN and NEVER auto-destroyed.
+message Heartbeat {
+  string host_id = 1;
+
+  // applied_seq has FROZEN semantics (D72): the MIN over the three host-side
+  // policy consumers (ds-dnsgate / ds-tlsproxy / nft-writer), advancing ONLY
+  // post-sweep. It feeds D36's unschedulable rule and terminates the (d)-rig
+  // push-to-enforced clock. This is the single policy version namespace echoed
+  // host-ward (D72; doc 13 §1 rule 3) — never a second version namespace.
+  uint64 applied_seq = 2;
+
+  // The reconciler's input: every session the host observes right now. The
+  // element is hypervisor.v1.ObservedSession (shared with RecoverSessions, §5.1)
+  // — the §3 state machine incl. PARKED + D77 SUSPENDED(reason).
+  repeated dreamserpent.hypervisor.v1.ObservedSession observed = 3;
+
+  // Floors-fit math for the scheduler (D37) — how much room this host has for
+  // the D37 cgroup-v2 floors of a new session.
+  HostCapacity capacity = 4;
+
+  // Per-session RSS/CPU/IO time series — wired from M0 (D37). Piggybacks the
+  // heartbeat into the short-retention rollup feeding the (d) rig (doc 15 §5.6).
+  repeated SessionSample samples = 5;
+
+  // The doc 14 §11 host-baseline artifact version — versioned WITH the host
+  // image; only the version string is echoed here, NEVER pushed over the policy
+  // stream (the artifact contents live in dataplane/artifacts/host-baseline/).
+  string host_baseline_version = 6;
+
+  // Image-cache locality feed: the digest of the host's warm image cache, for
+  // cache-locality placement.
+  string image_cache_digest = 7;
+
+  // Health of the host's boundary services (ds-dnsgate / ds-tlsproxy /
+  // nft-writer) — the agent-unreachable enforcement plane.
+  repeated ServiceHealth boundary = 8;
+}
+
+// HostCapacity is the scheduler's floors-fit input (D37; doc 15 §5.2). VALUES
+// are observed runtime quantities, rig-tuned — the SHAPE freezes, not the
+// numbers.
+message HostCapacity {
+  uint32 allocatable_vcpu = 1;        // vCPU headroom after current floors (D37 4:1 oversub posture)
+  uint64 allocatable_memory_bytes = 2; // memory headroom (D37 1.5:1 oversub posture)
+  uint64 allocatable_io_bps = 3;      // io headroom
+  uint32 running_sessions = 4;        // current session count on this host
+}
+
+// SessionSample is one per-session RSS/CPU/IO sample (D37; doc 15 §5.2). Wired
+// from M0; feeds the short-retention rollup, not the billing meter (billing
+// derives from session-record state transitions, doc 15 §5.6).
+message SessionSample {
+  string session_uuid = 1;
+  uint64 rss_bytes = 2;
+  uint64 cpu_nanos = 3;               // cumulative CPU time
+  uint64 io_read_bytes = 4;
+  uint64 io_write_bytes = 5;
+  uint64 sampled_at = 6;              // unix seconds; sample timestamp
+}
+
+// HealthState is a boundary-service health verdict (doc 15 §5.2). A DOWN
+// boundary service is what the agent-unreachable enforcement story is written
+// against — sessions stay default-deny when the plane degrades.
+enum HealthState {
+  HEALTH_STATE_UNSPECIFIED = 0;
+  HEALTH_STATE_HEALTHY = 1;
+  HEALTH_STATE_DEGRADED = 2;
+  HEALTH_STATE_DOWN = 3;
+}
+
+// ServiceHealth is one boundary service's health (doc 15 §5.2). `name` is the
+// service identity (e.g. "ds-dnsgate", "ds-tlsproxy", "nft-writer"); `applied_seq`
+// is that consumer's own applied policy seq (the per-consumer input to the D72
+// min-over-three the Heartbeat.applied_seq reports).
+message ServiceHealth {
+  string name = 1;
+  HealthState state = 2;
+  uint64 applied_seq = 3;             // this consumer's applied policy seq (D72 min input)
+  string detail = 4;                  // free-text diagnostic (rig-tuned, never frozen)
+}
+
+// SuspendCoordPhase is the D46 pause/resume coordination edge carried on the
+// host-ward session-lifecycle channel (D110; doc 12 §12). RESERVED at M0;
+// implementation lands before Stage 2 (TLS-1).
+enum SuspendCoordPhase {
+  SUSPEND_COORD_PHASE_UNSPECIFIED = 0;
+  // The orchestrator has paused the VM; ds-tlsproxy MUST hold and buffer both
+  // legs until RESUME_RESYNCED (D46 ≤5-min transparency invariant).
+  SUSPEND_COORD_PHASE_HOLD_BEGIN = 1;
+  // The VM is resuming AND the guest clock has been resynced; ds-tlsproxy MAY
+  // resume forwarding. The proxy MUST NOT resume on a bare unpaused signal —
+  // only on this phase with resume_with_clock_resync = true.
+  SUSPEND_COORD_PHASE_RESUME_RESYNCED = 2;
+  // Reserved for the 5–15-min best-effort degrade tier (D46); semantics defined
+  // at implementation time, before Stage 2.
+  SUSPEND_COORD_PHASE_HOLD_DEGRADE = 3;
+}
+
+// SuspendCoord is the D46 pause/resume coordination marker carried on the
+// host-ward session-lifecycle channel (D110; doc 12 §12; doc 15 §4.3).
+// RESERVED at M0; implementation fills the slot before Stage 2 (TLS-1).
+// Absent (zero-value) when the session is not in a hold/resume transition.
+message SuspendCoord {
+  SuspendCoordPhase phase = 1;
+
+  // Absolute unix-second deadline for this hold tier (D46). The proxy bounds
+  // its buffering and VM-leg socket timers (tcp_retries2 / TCP_USER_TIMEOUT)
+  // against this value; it is authoritative at the proxy, not recomputed.
+  uint64 tier_deadline_unix_sec = 2;
+
+  // Set on RESUME_RESYNCED when the guest clock correction has completed.
+  // ds-tlsproxy MUST NOT resume forwarding until this flag is true — an unpaused
+  // VM with an uncorrected clock violates the ≤5-min transparency invariant.
+  bool resume_with_clock_resync = 3;
+
+  // Idempotency key for level-triggered reconcile: a redelivered HOLD_BEGIN
+  // with the same dedup_key is a safe no-op at the proxy.
+  string dedup_key = 4;
+}
+
+// SessionLifecycleUpdate is the host-WARD session-lifecycle data feed carried on
+// the SAME seam (doc 15 §5.2) — the D72-EXEMPT class (freshness budget a few
+// seconds, NOT min-over-three gated). It carries the digest-ack relay (D73 —
+// proposed ack-er is the host agent itself, doc 15 OQ1, pending), D22 grant
+// delivery, the D78 attendedness field, and the D110 pause/resume coordination
+// slot. Distinct from the policy stream: fleet-scope digests ride policy_log via
+// WatchPolicies (doc 14 §7); this channel carries ONLY the session-lifecycle
+// class, never a second policy/digest namespace.
+message SessionLifecycleUpdate {
+  string session_uuid = 1;
+
+  // D73 digest-ack relay: the digest-set the host has applied for this session
+  // (OQ1's proposed ack-er is the host agent; the field is the relay slot).
+  string applied_digest_set_version = 2;
+
+  // D22 grant delivery: the live grant references in force for this session (the
+  // D72 sweep visibility list, host-ward half).
+  repeated string grant_refs = 3;
+
+  // D78 ATTENDEDNESS: a human holds the writer seat AND produced input within
+  // the last T minutes (T ~ 10, a POL-1 policy value, org-tunable, never code).
+  // M0/M1 interim is writer-attached-only (§5.5). This field MUST join the
+  // contract before Stage 2 (TLS-1 socket-hold and DNS-3 consume it at
+  // per-connection-verdict time); reserved-and-present from M0 so the consumer
+  // wiring is additive. Spectators/readers/canvas viewers NEVER count.
+  bool attended = 4;
+
+  // The server-stamped freshness clock for `attended` (§5.5/D78) — the
+  // few-seconds budget is measured against this, unix seconds.
+  uint64 attended_at = 5;
+
+  // D110 PAUSE/RESUME COORDINATION (D46 transparent-suspend tiers): the
+  // orchestrator→ds-tlsproxy hold/buffer marker. Absent (zero-value /
+  // UNSPECIFIED) when the session is not in a hold/resume transition.
+  // RESERVED at M0; implementation lands before Stage 2 (TLS-1) per D110.
+  // See doc 12 §12 and docs/sessions/round4/03-pause-resume-coordination.md.
+  SuspendCoord suspend_coord = 6;
+}
+
+// ReportHeartbeatResponse is returned when the heartbeat stream closes (graceful
+// host drain; doc 15 §5.2). Reserved as a distinct message (not
+// google.protobuf.Empty) so the close path can grow optional fields post-freeze
+// without a v2.
+message ReportHeartbeatResponse {
+  uint64 beats_received = 1;
+}

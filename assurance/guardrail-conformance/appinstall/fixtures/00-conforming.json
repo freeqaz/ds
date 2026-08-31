@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthetic CONFORMING manifest: the ratified onboarding CI-read triplet, each requested at READ level on the onboarding flow, every permission present in the doc 16 §5.2 inventory. The check must pass (zero violations) on this fixture.",
+  "requested": [
+    { "permission": "contents:read", "level": "read", "flow": "onboarding CI-run-metadata read" },
+    { "permission": "actions:read",  "level": "read", "flow": "onboarding CI-run-metadata read" },
+    { "permission": "metadata:read", "level": "read", "flow": "onboarding CI-run-metadata read" }
+  ]
+}

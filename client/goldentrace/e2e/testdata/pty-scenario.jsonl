@@ -1,0 +1,18 @@
+# pty-scenario.jsonl — the SYNTHETIC, deterministic TERMINAL drive cassette (D50:
+# hand-authored, never a real capture — it carries no session id / cost / path).
+#
+# One JSON TermStep per non-blank, non-comment line:
+#   {"send": <keystrokes>, "expect_grid_contains": [<grid substrings>],
+#    "expect_native_prompt": <bool>}
+#
+# It pins the low-entropy terminal interaction the offline fake-PTY tier
+# (TestPTYScenarioFromFixture) and the gated live KVM tier re-run: a banner paint,
+# a scripted PONG round-trip, CC's NATIVE in-terminal y/n ask (D144 — answered by a
+# KEYSTROKE in the byte stream, no attach.v1 grant frame), and a clean exit. The
+# assertions are GRID SUBSTRINGS (renderGrid strips SGR/cursor noise), never raw
+# bytes — robust to equivalent escape encodings (08 §4.4).
+{"expect_grid_contains": ["Claude Code", "welcome to the in-VM session"]}
+{"send": "print PONG\r", "expect_grid_contains": ["print PONG", "PONG"]}
+{"send": "run tool\r", "expect_native_prompt": true, "expect_grid_contains": ["Do you want to proceed?"]}
+{"send": "y\r", "expect_grid_contains": ["TOOL-OK: hi"]}
+{"send": "exit\r", "expect_grid_contains": ["bye"]}

@@ -1,0 +1,7 @@
+{
+  "row": "ech-svcb-suppression",
+  "kind": "https-svcb-record-query",
+  "domain": "api.allowed.example",
+  "want": "suppress-https-svcb-record",
+  "why": "no HTTPS/SVCB answer reaches a VM: a query for an HTTPS (type 65) / SVCB record is answered with the record type suppressed entirely (DNS-4 rule 4), so no ECH config and no alpn=h3 hint reaches the guest — forcing plaintext-SNI TCP the boundary can see (doc 06 §3c ECH/SVCB suppression; DNS-4 + TLS-1)"
+}

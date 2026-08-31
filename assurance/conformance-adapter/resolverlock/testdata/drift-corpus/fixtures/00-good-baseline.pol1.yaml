@@ -1,0 +1,28 @@
+# drift-corpus control: a well-formed minimal POL-2-shaped layer.
+# expected verdict (go, rust) = (accept, accept)
+# The baseline both readers accept — the lockstep "no false positive" anchor:
+# the Go resolver-lock scanner extracts the blocklist AND the Rust
+# ds_contracts::pol1::parse_layer parses it with zero PolicyErrors. Every other
+# fixture in this corpus is THIS document perturbed into exactly one drift class.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+baseline_pack:
+  pack_version: "drift-corpus-v0"
+  families:
+    core: { tier: enabled }
+    vcs: { tier: enabled }
+  entries:
+    - fqdn: api.example
+      family: core
+      ports: [443]
+      provenance_source_url: https://example.invalid/provenance
+      evidence: synthetic-fixture; not cert-pinned
+blocklist:
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+  - domain: dot.example
+    reason: dot-resolver
+    rung: block+log
+passthrough: []

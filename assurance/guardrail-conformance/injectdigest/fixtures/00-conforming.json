@@ -1,0 +1,7 @@
+{
+  "_comment": "Synthetic CONFORMING egress picture for the ISSUED{service_id} wrong-destination egress block (doc 16 §5.1/§6/§10; doc 06 §3c inject-class twin, digest half). TWO presentations of an ISSUED{github} digest: (1) an egress to a WRONG destination (evil.example, NOT the issued service) that WAS blocked — the keyed-issued-to-wrong-destination block held (doc 16 §5.5); and (2) an egress to the INTENDED service (github) that was NOT blocked — the injected credential fires exactly once and passes (doc 16 §10). The check must pass clean (zero violations); the green control proves BOTH the wrong-destination block AND the matching-destination pass in one picture.",
+  "presentations": [
+    { "name": "wrong-destination-blocked", "issued_service_id": "github", "egress_destination": "evil.example", "blocked": true },
+    { "name": "intended-destination-passes", "issued_service_id": "github", "egress_destination": "github", "blocked": false }
+  ]
+}

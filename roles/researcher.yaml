@@ -1,0 +1,43 @@
+# role: researcher — investigation/summarization sessions (strawman; doc 18 §5).
+# Read-mostly: research skills, document tooling, and a REQUESTED wider read-only
+# web envelope. The widening below is the worked example of the doc 18 §9 gate:
+# it is INERT (logged warning, admits nothing) until an org admin ratifies this
+# role version into the org catalog — session create never widens on its own.
+schema_version: role/v0
+name: researcher
+version: "2026.06.11-v1"
+description: >
+  Research role: deep-research and summarization skills, document/data tooling,
+  broader read-only web access gated on catalog ratification, no write grants.
+
+image:
+  layers:
+    - "images:layer/research-tools@STRAWMAN"   # pandoc/jq-class document + data tooling
+
+skills:
+  install:
+    - "skills:deep-research@1"    # STRAWMAN refs (doc 18 OQ2)
+    - "skills:summarize@1"
+    - "skills:source-citation@1"
+
+policy:
+  posture: standard
+  pack_families: {}
+  allowlist:                      # WIDENING REQUEST — inert until ratification (doc 18 §9);
+                                  # exact FQDNs only (stricter than D74's vendor-wildcard
+                                  # exception). Widening requests deliberately carry
+                                  # pack-style provenance (doc 13 §1 rule 4) for the
+                                  # ratification review; shape to be reconciled with
+                                  # doc 13's allowlist[] (domain-keyed) when the role
+                                  # compiler is specified.
+    - { fqdn: en.wikipedia.org,   ports: [443], evidence: role-strawman }
+    - { fqdn: arxiv.org,          ports: [443], evidence: role-strawman }
+  guardrails: []
+
+credentials:
+  scope_template:
+    services: []                  # no service grants: research output returns through
+    mode: read-only               #   the session, not through credentialed pushes
+
+runtime:
+  entrypoint_config_overlay_ref: null

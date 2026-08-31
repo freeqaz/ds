@@ -1,0 +1,36 @@
+# buf module config (buf v2 config format; pin the buf CLI in CI — 1.x).
+# D24: buf lint + buf breaking are THE merge gate for this tree (doc 15 §5).
+# Any change under proto/** runs the full D47 guardrail matrix (guardrail-map.yaml).
+#
+# `buf breaking` runs against the committed descriptor sets in baselines/
+# (e.g. `buf breaking --against ./baselines/<package>.binpb` in contracts.yml);
+# baselines/ is updated ONLY by freeze PRs (see FREEZE.md). At skeleton time there
+# are no .proto bodies and no baselines — the gate is RED by design.
+#
+# Module root is `.` (this proto/ directory). House style is directory-shaped
+# packages dreamserpent.<component>.v1 living at proto/dreamserpent/<component>/v1/,
+# so STANDARD's PACKAGE_DIRECTORY_MATCH requires the package's full path
+# (dreamserpent/<component>/v1) to be in-module — i.e. the module root must be
+# proto/ itself, not proto/dreamserpent. A `dreamserpent` root puts those files at
+# in-module path <component>/v1 and `buf lint` fails (exit 100); root `.` resolves
+# them at dreamserpent/<component>/v1 and lint passes. Everything downstream already
+# assumes root `.`: contracts.yml runs `buf lint`/`buf breaking` from proto/, the
+# baseline descriptor sets in baselines/ and `buf generate` (buf.gen.yaml -> gen/go)
+# all key off this root. Co-stewarded by Boundary + Orchestrator (CODEOWNERS /proto/,
+# README Owner); root `.` is the ratified, co-owner-signed-off decision.
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  # House style: packages are dreamserpent.<component>.v1 — directory-shaped,
+  # suffix-versioned (PACKAGE_VERSION_SUFFIX is part of STANDARD), and matched to
+  # proto/dreamserpent/<component>/v1/ by PACKAGE_DIRECTORY_MATCH under root `.`.
+  enum_zero_value_suffix: _UNSPECIFIED
+breaking:
+  use:
+    - FILE
+  # Post-freeze rule (doc 14 §2): additions are optional fields with reserved
+  # numbers planned ahead; anything else mints a sibling v2 package + a
+  # doc 04 §6 decision-log entry.

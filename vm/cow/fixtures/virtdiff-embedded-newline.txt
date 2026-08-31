@@ -1,0 +1,3 @@
+= /home/ds/.bashrc
++,"/home/ds/work/two
+line.md"

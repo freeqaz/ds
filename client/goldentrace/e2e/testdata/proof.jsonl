@@ -1,0 +1,11 @@
+# proof.jsonl — the deterministic single-turn headless-drive proof script (JSONL).
+# One Turn per non-blank, non-'#' line. The smoke harness (scripts/ds-headless-drive-smoke.sh)
+# drives this against real Claude Code behind DS_E2E_LIVE=1; the offline tests
+# (script_test.go) parse + step it against the fake-CC bridge with no live process.
+#
+# The single turn instructs CC to write a deterministic token to a proof file under
+# its /work cwd. The "allow" answer is auto-supplied on the attach.v1 grant path
+# (never --dangerously-skip-permissions); the gated test asserts BOTH the projected
+# attach.v1 ask round-trip AND that the proof file exists on the host /work mount
+# carrying the token (proving CC executed the instruction, not just streamed text).
+{"prompt":"Using the Bash tool, run exactly: printf '%s' 'DS-HEADLESS-PROOF-7Q2K' > /work/ds-headless-proof.txt — then stop.","allow":true,"assert":{"file":"ds-headless-proof.txt","contains":"DS-HEADLESS-PROOF-7Q2K"}}

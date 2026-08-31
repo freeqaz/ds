@@ -1,0 +1,10 @@
+{
+  "grant:00000000-0000-4000-8000-000000000001:github": {
+    "secret": "SYNTHETIC-PAT-DO-NOT-USE-d50-fixture",
+    "location": "Authorization"
+  },
+  "grant:00000000-0000-4000-8000-000000000001:npm": {
+    "secret": "SYNTHETIC-NPM-TOKEN-DO-NOT-USE-d50-fixture",
+    "location": "Authorization"
+  }
+}

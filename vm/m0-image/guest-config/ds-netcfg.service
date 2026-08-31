@@ -1,0 +1,70 @@
+# ds-netcfg.service — apply the per-session GUEST static net config (U4).
+#
+# Runs ds-apply-netcfg.sh early at boot, BEFORE ds-entrypoint, to address the
+# guest's routed tap NIC from the per-session ds-net.env the host renders onto the
+# config-drive (orchestrator/internal/hypervisor/libvirt/netconfig.go). When the
+# host runs the M0-minimal usermode SLIRP NIC instead (no routed tap), the host
+# emits NO ds-net.env and the script NO-OPS — so this unit is inert on the
+# SLIRP/offline path (the synthetic/onturn boot is unaffected).
+#
+# ORDERING:
+#   After=run-ds-entrypoint.mount     — the net config (ds-net.env) is the SECOND
+#                                       file on the SAME per-session config-drive as
+#                                       config.pb; the script reads it from the mount
+#                                       point, so the drive must be mounted first.
+#   Before=ds-entrypoint.service      — the entrypoint launches the runtime that
+#                                       egresses; its network must be configured first.
+#
+# DO NOT gate on network-online.target. This unit BRINGS THE NIC UP (it IS the thing
+# that makes the network ready); a Wants/After on network-online.target would
+# deadlock (network-online waits on a configured NIC, this unit configures it). The
+# same reasoning ds-entrypoint.service / ds-attachfwd.service already apply: the
+# attach control channel rides AF_VSOCK, and egress readiness is the routed tap +
+# nft4 floor, not systemd's network-online target.
+#
+# FAIL-POSTURE — WantedBy (best-effort), NOT RequiredBy: the SLIRP/offline path has
+# no ds-net.env, so ds-apply-netcfg.sh exits 0 (no-op) and the unit succeeds —
+# RequiredBy would be wrong (the script SUCCEEDS when absent, so it never fail-closes
+# a SLIRP boot). The fail-closed behavior under an ACTIVE routed tap lives in the
+# SCRIPT (it exits non-zero when ds-net.env is present-but-unappliable), which fails
+# THIS unit; the Before=ds-entrypoint ordering means that failure precedes the
+# entrypoint. WantedBy keeps a SLIRP boot from being held hostage to a net-config
+# unit that legitimately no-ops, while a present-but-broken routed-tap config still
+# fails the unit before the entrypoint runs.
+#
+# build-m0-image.sh substitutes the concrete script path for the __NETCFG_SCRIPT_PATH__
+# token at bake time (single-sourced from m0-image.env). Until the script is staged the
+# unit is fail-closed at boot (ConditionPathExists), the expected M0-skeleton state
+# (the same posture as the other guest units).
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[Unit]
+Description=Dream Serpent per-session guest static net config (U4)
+Documentation=https://github.com/dream-serpent/dream-serpent/blob/main/vm/m0-image/README.md
+# The net config (ds-net.env) is the SECOND file on the per-session config-drive;
+# it must be mounted before the script reads it.
+After=run-ds-entrypoint.mount
+# Configure the guest network before the entrypoint launches the egressing runtime.
+Before=ds-entrypoint.service
+# Fail closed if the apply script was never staged (M0 skeleton state).
+ConditionPathExists=__NETCFG_SCRIPT_PATH__
+
+[Service]
+Type=oneshot
+# Apply the per-session static net config (no-op when ds-net.env is absent —
+# the SLIRP/offline path; fail-closed when present-but-unappliable).
+ExecStart=__NETCFG_SCRIPT_PATH__
+# A applied static config persists for the unit's lifetime; oneshot + RemainAfterExit
+# so the ordering (Before=ds-entrypoint) is satisfied by a completed apply.
+RemainAfterExit=yes
+# Configuring the network needs CAP_NET_ADMIN; run as root for the ip(8) calls
+# (the entrypoint itself still drops to the unprivileged ds user — this is the one
+# privileged boot step, scoped to the net-config apply).
+User=root
+
+[Install]
+WantedBy=multi-user.target
+# Pull the net-config into the entrypoint's graph too. WantedBy/RequiredBy are
+# [Install] directives — systemd IGNORES them in [Unit] (live-found 2026-06-17).
+WantedBy=ds-entrypoint.service

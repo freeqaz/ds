@@ -1,0 +1,30 @@
+# Generated-code markers — keeps codegen output out of diff review noise and
+# collapsed on GitHub. The generated trees (skeleton design Part 3):
+#   proto/gen/**                              — committed Go stubs + generated fakes
+#   dataplane/crates/ds-contracts/src/gen/**  — Rust codegen (buf.gen.yaml target)
+# Both are produced by the proto/ codegen pipeline; hand edits are forbidden
+# (codegen-drift check in .github/workflows/contracts.yml).
+
+proto/gen/** linguist-generated=true -diff
+dataplane/crates/ds-contracts/src/gen/** linguist-generated=true -diff
+
+# Keep the hand-written files of generated trees reviewable.
+proto/gen/go/go.mod linguist-generated=false diff
+proto/gen/go/README.md linguist-generated=false diff
+proto/gen/go/doc.go linguist-generated=false diff
+
+# Normalize line endings.
+* text=auto
+
+# taskdb task/note store — ID-stable 3-way merge driver. Each task/note is its
+# own file keyed by a stable ULID, so concurrent coordinator/cross-machine
+# edits to DIFFERENT tasks never conflict, and edits to the SAME task reconcile
+# by union (status most-progressed-wins, depends_on unioned, never drop a task
+# either side has) instead of clobbering. The driver is `taskdb merge-json`,
+# registered per-clone by `taskdb setup` AND self-healed on every taskdb
+# invocation when `merge.taskdb.driver` is unset (git never auto-applies a merge
+# driver from a clone, so a `git clone --local` worktree that skipped setup would
+# otherwise silently fall back to text conflicts). Falls back to text conflicts
+# if .bin/taskdb is absent.
+tasks/task-*.json merge=taskdb
+tasks/note-*.json merge=taskdb

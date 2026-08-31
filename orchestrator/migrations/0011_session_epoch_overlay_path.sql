@@ -1,0 +1,40 @@
+-- 0011_session_epoch_overlay_path.sql — the per-session CoW overlay path (D29)
+-- on the per-host index epoch (doc 15 §4.1 step 4/7, §4.2 step). ADDITIVE column
+-- only, mirroring the migration-0010 mint_expiry precedent.
+--
+-- WHY THIS MIGRATION. The §4.2 teardown disposes the REAL qcow2 CoW overlay the
+-- host cloned for the session (D29 — the delta store + durability unit). On the
+-- HAPPY path the destroy reads that path from the in-process create-time
+-- HostAllocation.OverlayPath, but that create-local state does NOT survive a
+-- control-plane RESTART: a destroy that resolves its host-side state from the
+-- PERSISTED record (storeDestroyStateLookup → destroyRequestFromRecord) and the
+-- DESTROYING re-drive sweep (reconciler/redriver.go) both read the binding from
+-- the durable IndexEpoch — so unless the overlay path rides the epoch, a
+-- destroy-after-restart drives DestroyRequest.OverlayPath="" and LEAKS the CoW
+-- overlay (the M0 gap this closes). The in-memory store already carries it on the
+-- IndexEpoch (records.go IndexEpoch.OverlayPath, cloned in helpers.go); this is
+-- the matching persistence on the production Postgres path so both stores honor
+-- the same D33 durability contract.
+--
+-- ADDITIVE-ONLY (the unfreeze discipline). ONE column on the existing
+-- session_index_epochs table — no existing column, CHECK, index, or the
+-- UNIQUE(host_id, host_session_index) burned-never-recycle guard is touched, so
+-- every pre-existing epoch row and the conformance suite stay byte-for-byte
+-- valid. A row written before this migration (or a binding recorded before the
+-- §4.1 step-7 overlay clone) carries the empty-string overlay_path: the "no
+-- overlay recorded on this binding" posture (NOT NULL DEFAULT '', exactly the way
+-- tap_name / guest_ip_family default to '' on this same table — the Go field is a
+-- plain string whose zero value is "", with no NULL/empty distinction to preserve,
+-- unlike the *time.Time horizons that map zero→NULL).
+--
+-- THE FIELD (doc 15 §4.1 step 4/7, §4.2; D29):
+--   overlay_path — the per-session qcow2 CoW overlay the host cloned for THIS
+--                  binding. '' = no overlay recorded on the binding (pre-clone or
+--                  pre-migration row); a non-empty value is the durable path the
+--                  §4.2 teardown / DESTROYING re-drive disposes after a restart. A
+--                  migrated/parked re-placement records a fresh overlay on its new
+--                  epoch, so the open (current) epoch always carries the live
+--                  overlay to dispose.
+
+ALTER TABLE session_index_epochs
+    ADD COLUMN overlay_path text NOT NULL DEFAULT ''; -- doc 15 §4.1 step 4/7 / §4.2 per-session CoW overlay (D29); '' = none recorded

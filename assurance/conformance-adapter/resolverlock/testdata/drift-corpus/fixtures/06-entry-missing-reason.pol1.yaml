@@ -1,0 +1,15 @@
+# drift class: a blocklist entry omits its `reason:` field.
+# named edge shape: entry sans provenance (the resolver-lock per-entry reason).
+# expected verdict (go, rust) = (reject, accept)
+# Go: ErrEntryMissingFields — every shipped resolver-lock entry carries a reason
+#     (e.g. "doh-resolver"/"dot-resolver", §5/D53); a reasonless entry is a drift
+#     the scanner names rather than passing on.
+# Rust: BlockEntry.reason is Option<String>; absence parses to None (no error).
+#     The Go offline half is the field-presence tripwire. Complementary coverage.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+blocklist:
+  - domain: dns.example
+    rung: block+log
+passthrough: []

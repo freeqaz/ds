@@ -1,0 +1,7 @@
+::session attached  model=claude-sonnet-4-6  runtime=2.1.173  perm=default  cwd=/work  tools=[Task,Bash]
+--state -> WORKING (requesting)
+> assistant: The capital of France is Paris.
+% quota five_hour allowed (provisional)
+==session success turns=1 dur=1900ms reason=completed
+--state -> ATTACHED (turn_complete)
+[ session 0000000fc100 | state ATTACHED | success | seq 6 ]

@@ -1,0 +1,39 @@
+{
+  "kind": "passthrough-pinned-cert",
+  "why": "doc 06 §2.2 row 4 (cert-pinned conformance client) + doc 09 §5 TLS-4 done-when (Pinned pass-through is opaque, no swap) + doc 12 §5.3 stated non-claim (D17/D74): a cert-pinning client reaches its pinned server THROUGH the proxy when the SNI is on the D74 pass-through list. The proxy routes a RAW opaque tunnel — NO TLS termination, NO per-session-CA leaf, NO credential swap, NO secret scanning — so the ORIGINAL upstream cert arrives and the client's SPKI pin succeeds, and the upstream receives the client's EXACT bytes. This golden pins the opaque-tunnel trace SHAPE (the SNI, the netflow event field KEYS + the ABSENCE of HTTP/swap/scan keys, the request method/path + the upstream-received Authorization VERBATIM proving no swap, the tunneled handshake by DIGEST+LEN never inner payload) and the non-claim flags (pin_holds / swap_occurred=false / inspected=false / leaf_minted_for_origin=false). It NEVER inspects the inner payload — the test PROVES the opaqueness.",
+  "sni": "pinned.example",
+  "netflow": {
+    "kind": "Flow",
+    "field_keys": [
+      "dst",
+      "sni"
+    ],
+    "absent_keys": [
+      "authorization",
+      "header",
+      "host",
+      "method",
+      "path",
+      "scrub",
+      "secret",
+      "service",
+      "status",
+      "swap",
+      "url"
+    ],
+    "policy_rule_id": "passthrough:pinned.example"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/private-path",
+    "upstream_authorization_verbatim": "Bearer vm-short-lived-token-xyz",
+    "tunneled_bytes_digest": "sha256:5fdc2f6237430583852b20e352cc973da0732728aad9de00e148ac664f0ed29f",
+    "tunneled_bytes_len": 29
+  },
+  "non_claim": {
+    "pin_holds": true,
+    "swap_occurred": false,
+    "inspected": false,
+    "leaf_minted_for_origin": false
+  }
+}

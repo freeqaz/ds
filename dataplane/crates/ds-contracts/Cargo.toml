@@ -1,0 +1,25 @@
+[package]
+name = "ds-contracts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The NFT-1 mark-discipline lint, runnable as a process so CI
+# (scripts/lint-nft-artifacts.sh, rust-dataplane.yml) can gate the artifacts
+# dir. The same logic backs the `nft_mark_lint` integration test; the binary is
+# the std-only CLI wrapper (doc 14 §5, D76). Lives under bins/ rather than the
+# conventional src/bin/ because the repo .gitignore excludes any `bin/` dir.
+[[bin]]
+name = "ds-nft-mark-lint"
+path = "bins/ds-nft-mark-lint.rs"
+
+[dependencies]
+# Deliberately empty — stdlib only, so the workspace `cargo check`s OFFLINE.
+# FROZEN RULE (doc 14 §6, D67/D40): neither boundary framework (the DNS resolver
+# crate used by ds-dnsgate, the proxy crate used by ds-tlsproxy) may cross this
+# crate — not in its API and not in its dependency graph, so swapping either
+# framework stays a single-service library migration. The full rule, naming both
+# crates, lives in this crate's README and lib.rs doc-comment. Generated proto
+# code (Rust target of proto/buf.gen.yaml) lands under src/gen/ ONLY via the
+# one-shot Stage-0 freeze PR.

@@ -1,0 +1,35 @@
+{
+  "_comment": "SYNTHETIC red-path fixture (D50). A deliberately-drifted host-baseline that violates six doc 14 §11 obligations across D68/D66/D75/D76, so hostbaseline_test.go can prove HostBaseline.Check reports them (red-on-violation is non-vacuous). This is NOT a shipped artifact; it lives under fixtures/ (provenance-governed) and is skipped by LoadFixtures (subdirectory).",
+  "license": "Apache-2.0",
+  "artifact_version": 0,
+  "kernel": {
+    "min_version": "6.6",
+    "fallback": "delete+add",
+    "both_paths_in_ci": true
+  },
+  "libvirt": {
+    "isolated_ports_chosen": false,
+    "min_version_if_isolated_ports": "6.1.0"
+  },
+  "l2_isolation": {
+    "structural": true,
+    "br_netfilter_forbidden": false
+  },
+  "sysctls": {
+    "net.netfilter.nf_conntrack_tcp_loose": 1,
+    "net.netfilter.nf_conntrack_acct": 1,
+    "net.netfilter.nf_conntrack_timestamp": 1
+  },
+  "per_session_tap": {
+    "disable_ipv6": 0,
+    "accept_ra": 0,
+    "ra_dhcpv6_on_segment": false,
+    "ruleset_family": "ip"
+  },
+  "nft_mark_lint": {
+    "ruleset": "dataplane/artifacts/nft/nft-1-bootstrap.nft",
+    "constants_source": "ds-contracts",
+    "forbid_bits_14_23": false,
+    "forbid_unmasked_writes": true
+  }
+}

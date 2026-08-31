@@ -1,0 +1,16 @@
+{
+  "_comment": "Synthetic CONFORMING credential picture: a swap-class GitHub PAT that the egress-gateway swap keeps OUT of the VM (absent from all five enumerated surfaces — disk/env/cow_delta/agent_response/metal_host) and an inject-class AWS STS session that lives in the VM by design but carries a positive TTL bound and an ISSUED{aws} digest. The check must pass (zero violations): the D8 swap-class promise holds and the inject-class twin's TTL + ISSUED digest are present.",
+  "credentials": [
+    {
+      "name": "github-pat",
+      "class": "swap",
+      "long_lived_on_surfaces": []
+    },
+    {
+      "name": "aws-sts-session",
+      "class": "inject",
+      "ttl_seconds": 900,
+      "issued_digest": "ISSUED{aws}:hmac-sha256:9f1c0a"
+    }
+  ]
+}

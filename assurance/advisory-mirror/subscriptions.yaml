@@ -1,0 +1,137 @@
+# subscriptions.yaml — the four supply-chain advisory subscriptions (doc 14 §9).
+#
+# One advisory-mirroring process, four subscriptions, one owner. This file is the
+# config-as-code descriptor of the four; the process itself is described in README.md.
+#
+# Owner (proposed, pending ratification): the Boundary workstream owns the process
+# (it owns three of the four pins — D40, D67, D73); Canvas executes the Yjs leg (D86);
+# a named individual is assigned at Stage-1 start (doc 14 §9 OQ2 + the round4
+# ratification packet). The assignment TODO stays open until ratified.
+#
+# Every API-watch point below is carried VERBATIM from the doc 14 §9 watch table.
+# No D-number is minted here; every D-number cited already exists in doc 04 §6.
+#
+# Validate this file's shape with ./check.sh (stdlib-only, env-independent).
+
+version: 0
+
+# Proposed default per doc 14 §9 OQ2 / round4 packet — pending ratification.
+owner:
+  process_owner: "Boundary workstream"          # owns 3 of 4 pins: D40, D67, D73
+  yjs_leg_executor: "Canvas workstream"         # executes the D86 subscription (doc 17 §4.3)
+  named_individual: null                         # assigned at Stage-1 start; TODO stays open
+  status: proposed                               # pending ratification (doc 14 §9 OQ2)
+  ratification_ref: "round-4 ratification packet"
+
+# Where mirrored advisory tests land. Pins the doc 06 tiers referenced below.
+suite_destinations:
+  a: "doc 06 (a) — contract/component, fast/per-commit, module-resident"
+  c: "doc 06 (c) — guardrail-assurance, the advertised-property matrix (D26/D51)"
+
+subscriptions:
+
+  - id: pingora
+    pin: "0.8.x"
+    pin_posture: "pinned + vendored (D40)"
+    governing_decisions: [D40, D70, D76]
+    advisory_watch:
+      streams: ["GHSA", "RUSTSEC"]
+      class: "CVE-2025-4366 class"
+    # API watch items — carried VERBATIM from doc 14 §9.
+    api_watch_items:
+      - name: "get_original_dest"
+        note: "original-destination recovery; dual-stack since PR #387 — keep the v6 canary"
+      - name: "tweak_new_upstream_tcp_connection"
+        note: "the D76 SO_MARK insertion point"
+      - name: "CONNECT-method server option"
+        note: "0.8.0 CONNECT-method server option (re-verify before the TLS-2 estimate locks)"
+      - name: "HTTP/3 PRs #514/#524 + issue #95"
+        note: "re-checked at the D70 trigger"
+    mirror_destinations: [c]                      # proxy advisories assert advertised egress guardrails
+    re_eval_trigger:
+      decision: D40
+      condition: >-
+        stall >12 months without a release, or Envoy ships stable TLS bumping + ext_proc
+        and Pingora has concretely failed us
+      http3_recheck: "PRs #514/#524 + issue #95 re-checked at the D70 trigger"
+    migration_budget: "pin moves only with migration-budget churn-class updates in the same change"
+
+  - id: hickory-dns
+    pin: "0.26.x"
+    pin_posture: "pinned + vendored (D67), migration budget per minor until 1.0"
+    governing_decisions: [D67]
+    advisory_watch:
+      streams: ["hickory GitHub releases", "RUSTSEC"]
+      mandatory: true                             # RUSTSEC mirroring mandatory — fleet's only resolver
+      rationale: >-
+        ds-dnsgate is the fleet's only resolver, so the unpatched-advisory window is a
+        fleet availability risk (a fleet availability incident, not a backlog item)
+    # API / churn watch items — carried VERBATIM from doc 14 §9.
+    api_watch_items:
+      - name: "0.25->0.26 churn class"
+        note: "proto->net split, Authority->ZoneHandler"
+      - name: "no hickory types cross-service"
+        note: "doc 14 §6 — the D67 corollary, enforced structurally in ds-dnsgate listen/ boundary"
+    seed_corpus:
+      - "RUSTSEC-2026-0118 (NSEC3 loop)"
+      - "RUSTSEC-2026-0119 (compression bomb)"
+    mirror_destinations: [a, c]                    # parsing/encoding reproduction (a) + availability assertion (c)
+    re_eval_trigger:
+      decision: D67
+      condition: ">12 months without a release (symmetric with D40)"
+    migration_budget: "per minor until 1.0 (D67)"
+
+  - id: gitleaks-compatible-ruleset-format
+    pin: "D73 generic pack (format-compatibility pin)"
+    pin_posture: "format-compatibility pin"
+    governing_decisions: [D73]
+    # The pinned TOML fields — carried VERBATIM from doc 14 §9.
+    format_fields:
+      - "id"
+      - "regex"
+      - "keywords"
+      - "secretGroup"
+      - "allowlists"
+      - "[[rules.required]]"
+      - "[extend]"
+    api_watch_items:
+      - name: "upstream format changes"
+        note: "format-compatibility watch"
+      - name: "curated-ruleset import cadence"
+        note: "periodic import of the curated ruleset"
+    advisory_watch:
+      # Upstream rule-quality (FP-class) regressions feed pack updates via POL-4, never a proxy release.
+      regression_class: "rule-quality (FP-class) regressions"
+      remediation_path: "pack updates via POL-4"
+      never: "a proxy release"
+    mirror_destinations: [c]                       # secret-scanning is an advertised guardrail
+    re_eval_trigger:
+      condition: "format divergence that breaks pack import"
+    migration_budget: "format-compatibility pin moves only on a real upstream format break"
+
+  - id: yjs-ecosystem
+    pin: "yjs + y-protocols + provider + persistence packages (canvas stack, doc 17 §4.3)"
+    pin_posture: "pinned + vendored (D86, house pattern per D40/D67); provider/persistence packages pinned when chosen (M2 evaluation)"
+    governing_decisions: [D86]
+    executed_by: "Canvas workstream"               # under the same process (doc 17 §4.3)
+    advisory_watch:
+      streams: ["GHSA", "npm"]
+      mirror_into: "the doc 06 (a) suite"
+    # API watch items — carried VERBATIM from doc 14 §9.
+    api_watch_items:
+      - name: "update-encoding changes"
+        note: >-
+          an encoding break is a stored-document migration event — doc 17's golden-trace
+          corpus pins the encoding
+      - name: "provider-package maintenance"
+        note: >-
+          single-maintainer concentration risk; Hocuspocus and the Rust yrs port are the
+          named hedges
+    mirror_destinations: [a]                        # doc 14 §9: GHSA/npm stream mirrored into the (a) suite
+    re_eval_trigger:
+      decision: D86
+      condition: >-
+        core yjs stalls >12 months, or a stored-format-breaking change lands without a
+        migration path — fallback evaluation (Automerge-class or bespoke server-authoritative)
+        requires a decision row against D86
+    migration_budget: "an encoding break is a stored-document migration event (golden-trace corpus pins the encoding)"

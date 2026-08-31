@@ -1,0 +1,6 @@
+ds.fleet_revocation.v1
+schema=fleet-revocation/v1
+batch=kill-switch-golden-1
+entries=2
+e=b:0123456789abcdef0123456789abcdef
+e=f:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff

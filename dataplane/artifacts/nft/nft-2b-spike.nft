@@ -1,0 +1,65 @@
+#!/usr/sbin/nft -f
+#
+# NFT-2b-spike — standalone redirect table for the Pingora transparent-proxy spike
+# task:      01KTWJ29JG8JWXXV4KAT3EHF8H
+# substrate: bridge ds-br0, tap dstap-0, nft table inet dsspike
+#            (local KVM rig: $QEMU_PREFIX qemu build, /dev/kvm; ratified 2026-06-13)
+# governing: doc 09 §3 NFT-2b · doc 03 §3 · D44 D66 D69 · round2/04
+#
+# WHAT THIS IS
+#   A spike-only NAT table (`inet dsspike`) that redirects port-80/443 TCP from
+#   a single session tap (`dstap-0`) into `ds-tlsproxy`'s transparent listeners
+#   (ports 18080/18443). It is deliberately SEPARATE from `ds_boundary` so the
+#   spike is non-destructive — it touches no production table and is reversible
+#   with a single `nft delete table inet dsspike`.
+#
+#   This table becomes the NFT-2b redirect clause in `ds_boundary` when TLS-1
+#   lands (doc 09 §3 NFT-2b / Stage 2). The rule shape is identical; the
+#   containment difference is the only spike-specific choice.
+#
+# INSTALL / REMOVE
+#   Install: sudo nft -f nft-2b-spike.nft
+#   Remove:  sudo nft delete table inet dsspike
+#   Verify:  sudo nft list table inet dsspike
+#            curl --interface dstap-0 http://example.com  # from inside the VM
+#
+# SHAPE INVARIANTS (D69/D44, doc 09 §3 NFT-2)
+#   1. Interface-matched ONLY — `iifname "dstap-0"` (the unforgeable attachment
+#      point, D66) — NEVER `ip saddr`. A VM can forge its source address; it
+#      cannot forge which tap it is attached to (doc 03 §3, doc 06 (c) row).
+#   2. `redirect` verdict to the proxy port — NEVER `dnat to 127.0.0.1` (the
+#      `route_localnet` footgun that D69/round2/04 explicitly prohibits).
+#   3. TCP only on ports 80/443 (this is NFT-2b, the TLS proxy path).
+#      The udp/tcp 53 redirect is owned by the DNS NFT-2 rules (nft-1-bootstrap.nft).
+#
+# VERIFIED BY
+#   The ds-nft redirect.rs shape predicate (the mechanism-agnostic CI lint):
+#     cargo test -p ds-nft -- nft2
+#   The companion netns spoofing test (when kernel available):
+#     cargo test -p ds-nft -- nft2_spoofing_netns --ignored
+
+# Idempotent install: drop and recreate this table only.
+# We never touch other tables in the netns (ds_boundary, WireGuard, etc.).
+table inet dsspike
+delete table inet dsspike
+
+table inet dsspike {
+	chain prerouting {
+		type nat hook prerouting priority dstnat; policy accept;
+
+		# HTTP transparent redirect: VM outbound tcp/80 → ds-tlsproxy :18080.
+		# Matches on the unforgeable attachment-point interface (D44/D66): a
+		# packet with a forged `ip saddr` still arrives on its real dstap-0 and
+		# is redirected here (the doc 06 (c) in-VM-spoofing row — source-IP
+		# selection is deliberately absent). `ds-tlsproxy` recovers the original
+		# destination via SO_ORIGINAL_DST (Pingora's SocketDigest::original_dst())
+		# and the session via the post-NAT local address (D69 invariant 2).
+		iifname "dstap-0" tcp dport 80 redirect to :18080
+
+		# HTTPS transparent redirect: VM outbound tcp/443 → ds-tlsproxy :18443.
+		# The spike forwards the TLS stream opaquely (no termination — the VM's
+		# browser/curl does the TLS handshake directly with the origin server).
+		# TLS-1 SNI-peek + client-hello inspection land in the production service.
+		iifname "dstap-0" tcp dport 443 redirect to :18443
+	}
+}

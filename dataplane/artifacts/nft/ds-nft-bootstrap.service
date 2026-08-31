@@ -1,0 +1,89 @@
+# NFT-1 — Host bootstrap ruleset installer (+ NFT-4 resolver-bypass closure +
+#         NFT-3b Stage-3 OUTPUT containment).
+# unit-version: 3
+# governing: doc 09 §3 (NFT-1/NFT-4) · doc 12 §4.2 (NFT-3b, D76) · doc 14 §5/§11
+#            (host baseline, mark-space) · D69 · D70 · D75 · D76
+#
+# Installs the versioned NFT-1 default-deny ruleset declaratively at boundary
+# start, then layers the NFT-4 resolver-bypass closure and the NFT-3b Stage-3
+# OUTPUT-chain containment rulesets on top. The rulesets are build artifacts
+# (ds-nft-bootstrap.nft, nft-4-resolver-closure.nft, nft-3b-output.nft); this
+# unit is the ONLY sanctioned application path — `nft -f` on each artifact, never
+# an interactive `nft` shell (doc 09 §3: "if you are typing nft into a host shell,
+# you are doing it wrong"). The ds_boundary table is the default-deny floor the
+# whole boundary stack (ds-dnsgate, ds-tlsproxy, ds-nft runtime writes) assumes is
+# present (and, since the floor-self-sufficiency fix in taskdb 01KTZV3XN, it is
+# the floor that issues the LIVE udp/443 QUIC reject — in its forward chain before
+# its terminal drop — so the QUIC reject does not depend on NFT-4 loading); the
+# ds_resolver_closure table (NFT-4, D69/D70) brackets NFT-1 in priority (its
+# observe chain at nat prerouting -101, its forward chain at filter +1) so it must
+# load with/after the floor, adding the foreign-resolver bypass-attempt
+# counter+nflog, the DoT/853 drop, and a redundant defense-in-depth copy of the
+# udp/443 QUIC reject;
+# the ds_proxy_out table (NFT-3b, D76) is the Stage-3 hardening that bounds the
+# proxy's OWN host-egress (the marked upstream leg) to ∪(per-session admitted
+# IPs) and fail-closed-drops + nflogs any unmarked/unauthorized proxy connect.
+#
+# Idempotent: each ruleset's own `delete table inet <name>` preamble makes
+# re-running this unit (re-install, restart) converge to the same state without
+# touching any other table in the netns. The three ExecStart lines run in order
+# (oneshot), so the NFT-1 floor is in place before the NFT-4 closure that brackets
+# it and the NFT-3b table that layers on it. ExecStop tears all three of our
+# tables down cleanly, in reverse order.
+#
+# NFT-4 (ds_resolver_closure) and NFT-3b (ds_proxy_out) each live in their own
+# inet table, independent of the ds_boundary floor. NFT-3b is a Stage-3,
+# non-gating hardening artifact (D76, off the M1 gate list); removing either
+# table's ExecStart/ExecStop lines returns the host to the NFT-1 baseline without
+# affecting the default-deny floor — the three artifacts are independent tables.
+#
+# This unit consumes the versioned host baseline artifact
+# (../host-baseline/host-baseline.v0.json, doc 14 §11) by reference — kernel
+# ≥6.12, nf_conntrack_tcp_loose=0, nf_conntrack_acct=1, nf_conntrack_timestamp=1,
+# br_netfilter forbidden, per-session-tap IPv6 disabled. That baseline is applied
+# by its own unit; ordering is declared via After= so conntrack sysctls and the
+# kernel floor are in place before the ct-state rules load. NFT-1 does not
+# re-derive the baseline. The baseline artifact and this ruleset version together;
+# drift between them is RED in the doc 06 (c) suite
+# (assurance/guardrail-conformance/nftgate, hostbaseline_test.go).
+
+[Unit]
+Description=Dream Serpent NFT-1 default-deny boundary bootstrap + NFT-4 resolver closure + NFT-3b OUTPUT containment
+Documentation=file:///etc/ds/nft/ds-nft-bootstrap.nft
+Documentation=file:///etc/ds/nft/nft-4-resolver-closure.nft
+Documentation=file:///etc/ds/nft/nft-3b-output.nft
+DefaultDependencies=no
+# The host baseline (sysctls + kernel floor) must be in place first: the ct-state
+# rules in the ruleset depend on nf_conntrack being loaded and configured.
+After=ds-host-baseline.service systemd-sysctl.service network-pre.target
+Wants=ds-host-baseline.service
+Before=network-pre.target
+# Boundary services must not start before the default-deny floor exists.
+Before=ds-dnsgate.service ds-tlsproxy.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Declarative install of the versioned artifacts. %h-independent absolute paths;
+# the artifacts ship to /etc/ds/nft/ as part of the boundary image. Oneshot runs
+# the ExecStart lines in order: the NFT-1 default-deny floor first, then the
+# NFT-4 resolver-bypass closure that brackets it (observe at nat prerouting -101,
+# forward at filter +1 — both relative to NFT-1's chains, so the floor must exist
+# first), then the NFT-3b Stage-3 OUTPUT-chain containment that layers on top.
+ExecStart=/usr/sbin/nft -f /etc/ds/nft/ds-nft-bootstrap.nft
+ExecStart=/usr/sbin/nft -f /etc/ds/nft/nft-4-resolver-closure.nft
+ExecStart=/usr/sbin/nft -f /etc/ds/nft/nft-3b-output.nft
+# Rollback: remove only our own tables, in reverse order, leaving every other
+# netns table intact. NFT-3b's containment comes down first, then the NFT-4
+# closure, then the floor they rode.
+ExecStop=/usr/sbin/nft delete table inet ds_proxy_out
+ExecStop=/usr/sbin/nft delete table inet ds_resolver_closure
+ExecStop=/usr/sbin/nft delete table inet ds_boundary
+# A failed install must NOT leave a half-open boundary: fail loudly so the
+# orchestrator refuses to admit sessions onto an un-fenced host.
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthetic CONFORMING pass-through config: the shipped baseline pack (is_default=true) with an EMPTY pass-through list (no endpoint flagged pass_through). Every endpoint is TLS-terminated at the per-session CA and runs the inspected chain (full-visibility egress by default); swaps happen only on the terminated path. The check must pass (zero violations): the D17 pass-through list is empty by default (D74).",
+  "is_default": true,
+  "endpoints": [
+    { "host": "github.com",          "pass_through": false, "tls_terminated": true, "swap_performed": true },
+    { "host": "api.anthropic.com",   "pass_through": false, "tls_terminated": true, "swap_performed": false },
+    { "host": "registry.npmjs.org",  "pass_through": false, "tls_terminated": true, "swap_performed": false }
+  ]
+}

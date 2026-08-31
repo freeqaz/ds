@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# taskdb pre-commit hook: freeze the live SQLite store to tasks/*.json and
+# stage the result so the commit carries the current task state.
+#
+# Installed by `make install-hooks` (sets core.hooksPath=scripts/hooks).
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# Linked worktree (.git is a file): task state belongs to the primary checkout.
+if [[ -f "$REPO_ROOT/.git" ]]; then
+	exit 0
+fi
+
+TASKDB="$REPO_ROOT/.bin/taskdb"
+
+# If the binary isn't built, skip silently — taskdb is a convenience layer,
+# not a gate. `make taskdb` builds it.
+if [[ ! -x "$TASKDB" ]]; then
+	exit 0
+fi
+
+# Nothing to freeze if the live DB was never created.
+if [[ ! -f "$REPO_ROOT/taskdb.sqlite" ]]; then
+	exit 0
+fi
+
+# Hooks are a convenience, never a gate: a freeze runtime failure must not abort
+# the commit, and tasks/ is staged only if the freeze actually succeeded.
+#
+# Concurrent sessions share the one live DB, and a coordinator's bulk
+# freeze/thaw can hold the write lock past the binary's 5 s busy_timeout —
+# so retry with backoff, and when the freeze still fails, say so loudly:
+# a silent skip means the commit quietly doesn't carry current task state
+# (observed 2026-06-12).
+freeze_err=""
+for delay in 0.2 0.4 0.8 1.6 0; do
+	if freeze_err=$("$TASKDB" freeze 2>&1 >/dev/null); then
+		git add "$REPO_ROOT/tasks"
+		exit 0
+	fi
+	[[ "$delay" == 0 ]] || sleep "$delay"
+done
+echo "taskdb pre-commit: freeze FAILED after 5 attempts — this commit will NOT carry current task state" >&2
+echo "  last error: ${freeze_err:-<no output>}" >&2
+echo "  recover with: .bin/taskdb freeze && git add tasks && git commit --amend --no-edit" >&2
+exit 0

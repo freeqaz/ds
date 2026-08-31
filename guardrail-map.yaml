@@ -1,0 +1,498 @@
+# guardrail-map.yaml — D47 fail-closed path-glob -> guardrail-tag map.
+# Owner: Boundary workstream.
+#
+# Consumed by .github/workflows/guardrail-scope.yml: the diff of a PR is matched
+# against these globs to select which guardrail-assurance tags must run.
+#
+# FAIL-CLOSED RULE (D47): a changed path that matches NO glob below selects the
+# FULL guardrail matrix. Globs here are an optimization that narrows scope for
+# well-understood trees — never a safety requirement. Forgetting to map a new
+# tree costs CI time, not coverage.
+#
+# Tag vocabulary follows doc 06 §3: guardrail-assurance / conformance — never
+# attack/redteam naming (doc 06 §3c).
+
+version: 0
+
+default:
+  # Unmapped paths => the full matrix. Do not weaken this.
+  unmapped: full-matrix
+
+rules:
+  # Contract changes ripple to every consumer: full matrix, always (doc 15 §11).
+  - glob: "proto/**"
+    tags: [full-matrix]
+
+  # The executable spec and the data plane it specifies: boundary tag set.
+  - glob: "boundary/**"
+    tags: [boundary-conformance, boundary-guardrail]
+  - glob: "dataplane/**"
+    tags: [boundary-conformance, boundary-guardrail]
+
+  # PRECEDENCE (D47): the scope selector picks the MOST-SPECIFIC matching glob, so
+  # this row narrows the dnsgate subtree to the doc 06 (c) rows ds-dnsgate OWNS
+  # (doc 11 §6) on top of the broader dataplane/** boundary tags above — it does not
+  # weaken them. A path that matches NO glob still selects the full matrix
+  # (default.unmapped), and a mis-mapped path is over- not under-covered, so the row
+  # stays fail-closed. The dnsgate tags are the doc 06 (c) matrix rows from doc 11 §6:
+  # resolver-bypass (port-53/DoT/QUIC), DoH endpoint blocking, DNS rebinding, ECH /
+  # HTTPS-SVCB suppression, and the dormant IPv6 closure.
+  - glob: "dataplane/services/ds-dnsgate/**"
+    tags: [boundary-conformance, boundary-guardrail, dns-resolver-bypass, dns-doh-blocking, dns-rebinding, dns-ech-https-svcb-suppression, dns-ipv6-closure]
+
+  # PRECEDENCE (D47): like the dnsgate row above, this most-specific glob narrows the
+  # ds-tlsproxy subtree ON TOP OF the broader dataplane/** boundary tags — a superset
+  # (never a weakening): it re-lists both boundary tags and adds the per-session
+  # pool-partition guardrail. It scopes the D76 per-session upstream pool-reuse KEY
+  # (doc 12 §4.2 "pools are partitioned per session ... no upstream socket is ever used
+  # for a session other than the one whose mark it carries"; §13.4 session-first
+  # compound reuse key): any future "optimize pooling" change to ds-tlsproxy is caught
+  # by the doc 06 diff-scoping rule and must run the tlsproxy-pool-partition guardrail
+  # so cross-session reuse can never be silently reintroduced. A path matching NO glob
+  # still selects the full matrix (default.unmapped) and a mis-mapped path is over- not
+  # under-covered, so the row stays fail-closed.
+  - glob: "dataplane/services/ds-tlsproxy/**"
+    tags: [boundary-conformance, boundary-guardrail, tlsproxy-pool-partition]
+
+  # Docs never trigger guardrail runs.
+  - glob: "docs/**"
+    tags: []
+
+  # The canonical spawn-scenario table is in-repo TEST-ENUMERATION data (a list
+  # of fixture names + read-side facts the golden-trace harness agrees on), not a
+  # service boundary and not a guardrail surface — like docs/, it triggers no
+  # guardrail runs. Mapping it fail-closed only narrows CI scope; forgetting it
+  # would cost the full matrix, never coverage (D47).
+  - glob: "client/goldentrace/spawnscen/**"
+    tags: []
+
+  # serpent-share is a DEMO-grade OSS client tool (D141): N browsers share ONE
+  # Claude Code stdin via hostbridge.Bridge DIRECTLY (it deliberately bypasses the
+  # Server one-writer/N-reader seat — README.md). It is stdlib-only client tooling
+  # (a command + an embedded HTML page + a two-tier smoke), NOT a service boundary
+  # and NOT a guardrail (c)-surface — like docs/ and the spawnscen table it
+  # triggers no guardrail-assurance rows (an empty tag set). This is a CI-scope
+  # NARROWING only: an unmapped path still selects the full matrix
+  # (default.unmapped) and a mis-mapped path is over- not under-covered, so the row
+  # stays fail-closed (D47).
+  - glob: "client/cmd/serpent-share/**"
+    tags: []
+
+  # Changing the map itself is a full-matrix event (and a Boundary review).
+  - glob: "guardrail-map.yaml"
+    tags: [full-matrix]
+
+  # Session-role bundles (doc 18; ratified 2026-06-12, D89-D96): per-claim assurance
+  # tags seeded from the doc 18 §11 hooks (synthetic fixtures only, D50) — schema
+  # validation, narrowing holds, widening gate, pin-and-audit, deny-overrides.
+  - glob: "roles/**"
+    tags: [role-schema-validation, role-narrowing-holds, role-widening-gate, role-pin-and-audit, role-deny-overrides]
+
+  # Scoped agent tokens (doc 19; ratified 2026-06-12, D97-D105): per-claim assurance
+  # tags seeded from the doc 19 §13 hooks (synthetic fixtures only, D50); these rows
+  # also join the D26/D51 public conformance package as it lands.
+  - glob: "identity/tokens/**"
+    tags: [token-narrowing-monotonicity, token-chain-revocation, token-hierarchy-separation, token-fanout-without-mint, token-fingerprint-only, token-fleet-revocation-clock]
+
+  # Contract-harness dual-run seams (doc 06 §2.1; doc 15 §11). Each seam dir holds a
+  # per-seam conformance Suite run against the real impl AND the generated fake over
+  # bufconn — a doc 06 §3(a) contract / §3(c) conformance surface, NOT an (a)dversarial
+  # guardrail surface, so the tag is the seam's own conformance row (the <domain>-
+  # conformance shape used by boundary-conformance above), never attack/redteam naming
+  # (doc 06 §3c). A diff confined to one seam runs that seam's conformance instead of the
+  # full matrix; this NARROWS scope and is fail-closed (an unmapped seam dir, and any
+  # touch of the seam's proto contract, still ripples to proto/** => full-matrix above,
+  # and a mis-mapped seam path is over- not under-covered). Synthetic fixtures only (D50).
+  #
+  # NOTE: the orchestrator <-> host-agent seam (seams/hostagent) is the harness's proving
+  # ground (doc 06 §2.1); mapped here alongside the orchestrator <-> hypervisor-driver
+  # seam (seams/hypervisor, HypervisorDriverService per doc 15 §11) and the orchestrator's
+  # own SessionService / PolicyService seams (seams/orchestrator-session,
+  # seams/orchestrator-policy — orchestrator.v1 per doc 15 §11) for parity — all four rode
+  # the safe unmapped => full-matrix default before their rows, so each is a CI-scope
+  # optimization, never a coverage change (D47). The same parity now extends to the four
+  # identity.v1 / boundary.v1 seams the harness adds next: the IdentityMintService mint seam
+  # (seams/identity-mint, doc 16 §4), the IdentityValidationService swap-validation seam
+  # (seams/identity-validate, the D22 frozen Validate contract, doc 16 §9), the
+  # DigestFeedService producer seam (seams/identity-digestfeed, doc 16 §6), and the
+  # boundary.v1 PolicyStreamService distribution seam (seams/boundary-policystream, doc 16
+  # §6.2 / boundary/v1 policy_stream.proto). Each likewise rode the safe unmapped =>
+  # full-matrix default before its row below, so mapping it only NARROWS CI scope to that
+  # seam's own conformance row — never a coverage change (D47).
+  #
+  # The same parity now extends to the canvas.v1 BoardService dual-run seam
+  # (seams/canvas-board, the collaborative-canvas board contract / canvas/v1 board.proto):
+  # it too rode the safe unmapped => full-matrix default before its row below, so mapping it
+  # only NARROWS CI scope to that seam's own conformance row — never a coverage change (D47).
+  # Two NO-OP confirmations recorded for the same wave's surfaces, each already subsumed by
+  # an existing glob so NO new row is added: (1) the canvas.v1 generated fake the fakegen
+  # pipeline emits lands under proto/gen/go/dreamserpent/canvas/v1/canvasv1fake/ — already
+  # inside the proto/** glob above ([full-matrix]); (2) the wave-1 additions to the
+  # IdentityValidationService and PolicyStreamService seams (the ask-grant lookup rows and
+  # the chained-token affordances) are new files/symbols WITHIN the already-recursive
+  # seams/identity-validate/** and seams/boundary-policystream/** globs below, which match
+  # anything added beneath those seam dirs without a glob change.
+  #
+  # The canvas.v1 / boundary.v1 / identity.v1 fakes the fakegen pipeline emits land under
+  # proto/gen/go/dreamserpent/{canvas,boundary,identity}/** — already inside the proto/** glob
+  # above ([full-matrix]), so they are intentionally left fail-closed there and need no
+  # row here; a touch of any generated fake is a contract event => full matrix (D47).
+  - glob: "assurance/contract-harness/seams/hostagent/**"
+    tags: [hostagent-conformance]
+  - glob: "assurance/contract-harness/seams/hypervisor/**"
+    tags: [hypervisor-driver-conformance]
+  - glob: "assurance/contract-harness/seams/orchestrator-session/**"
+    tags: [session-service-conformance]
+  - glob: "assurance/contract-harness/seams/orchestrator-policy/**"
+    tags: [policy-service-conformance]
+  - glob: "assurance/contract-harness/seams/identity-mint/**"
+    tags: [identity-mint-conformance]
+  - glob: "assurance/contract-harness/seams/identity-validate/**"
+    tags: [identity-validation-conformance]
+  - glob: "assurance/contract-harness/seams/identity-digestfeed/**"
+    tags: [digest-feed-conformance]
+  - glob: "assurance/contract-harness/seams/boundary-policystream/**"
+    tags: [policy-stream-conformance]
+  - glob: "assurance/contract-harness/seams/canvas-board/**"
+    tags: [canvas-board-conformance]
+  - glob: "assurance/contract-harness/seams/auth-session/**"
+    tags: [auth-session-conformance]
+
+  # ── Auth SDK (D123–D129; doc 23) ────────────────────────────────────────────
+  # identity/auth-sdk/ owns the human-principal auth flows and token lifecycle.
+  # Three guardrail tags cover the token invariants from doc 23 §5–§6 + D126/D127:
+  #   token-narrowing-monotonicity  — sub-token scopes ⊆ parent scopes (D126)
+  #   token-chain-revocation        — revoke parent → cascade to all derived tokens (D126)
+  #   token-hierarchy-separation    — user auth token ≠ agent sub-token (D125/D126)
+  - glob: "identity/auth-sdk/**"
+    tags: [token-narrowing-monotonicity, token-chain-revocation, token-hierarchy-separation]
+
+  # proto/dreamserpent/auth/v1/ — any proto change is a contract event → full-matrix.
+  # (Already covered by the top-level proto/** rule above; this narrower row is
+  # explicit documentation that auth.v1 carries the same obligation.)
+  - glob: "proto/dreamserpent/auth/v1/**"
+    tags: [full-matrix]
+
+  # ── Golden-image rotation / freshness (doc 03 §6 "Package & build caching", the
+  # "Nightly golden images" bullet — the CVE-roll SLA; D12/D29/D51) ──────────────
+  # assurance/guardrail-conformance/goldenfreshness/ holds the executable form of
+  # the golden-image rotation / freshness (c)-tier claim: a synthetic golden
+  # manifest is diffed against the rotation policy and FAILS on STALE / MISSING /
+  # UNROTATABLE goldens (the same verdicts images/golden/nightly-rebuild.sh emits
+  # at runtime). This is a doc 06 §3c CONFORMANCE row, never attack/redteam naming
+  # (doc 06 §3c). The single golden-rotation-freshness tag is the conformance row
+  # for this guarantee (the <domain>-freshness shape, kin to the seam <domain>-
+  # conformance tags above); the tag name is single-sourced with the package's
+  # claim metadata (goldenfreshness/doc.go REGISTRATION). A diff confined to this
+  # adapter runs that row instead of the full matrix — a CI-scope NARROWING, and
+  # fail-closed: an unmapped path still selects the full matrix (default.unmapped),
+  # and a mis-mapped path is over- not under-covered (D47). Synthetic fixtures only
+  # (D50).
+  - glob: "assurance/guardrail-conformance/goldenfreshness/**"
+    tags: [golden-rotation-freshness]
+
+  # ── doc 20 §4 per-claim conformance rows (D47 first per-claim seeding;
+  # SUMMARY next-action 4) ──────────────────────────────────────────────────
+  # The doc 20 §4 guardrail-claims table inventories five per-control claims, each
+  # to register at the guardrail-map's first per-claim seeding (D47). Each row below
+  # maps the MOST-SPECIFIC owning guardrail-conformance package glob -> that package's
+  # SINGLE-SOURCED guardrail Tag const (the package's `const Tag`, pinned by its own
+  # TestTagStable guard so the §3c table, the package, and this map name the SAME row;
+  # the goldenfreshness row above is the precedent). This is the same CI-scope NARROWING
+  # the seam / goldenfreshness rows are: a diff confined to one package runs that
+  # package's row instead of the full matrix, and it stays fail-closed — an unmapped
+  # path still selects the full matrix (default.unmapped) and a mis-mapped path is over-
+  # not under-covered (D47). Synthetic fixtures only (D50); rows ship in the D51 public
+  # package with their doc 20 §7 non-claims carried in-row by the package's doc.go.
+  #
+  # Two of the five doc 20 §4 claims have a landed owning package that single-sources a
+  # `const Tag` (commit 832d55e6, the M1 (c) rows), so they seed here now:
+  #
+  #   (3) full-visibility egress + bounded pass-through [D17/D74/D82] — owning package
+  #       assurance/guardrail-conformance/passthrough (const Tag = pass-through-empty-by-
+  #       default; doc 06 §3c "Cert-pinned pass-through"; the §7.1 pass-through non-claim
+  #       is carried in-row by passthrough/doc.go).
+  #   (4) planted-canary-never-egresses [D73/D84] — owning package
+  #       assurance/guardrail-conformance/secretegress (const Tag = secret-egress-canary-
+  #       blocked; doc 06 §3c "Secret-scanning gate"; the §7.1/§7.2 pass-through +
+  #       adversarial-encoding non-claims are carried in-row by secretegress/doc.go).
+  #
+  # The other three doc 20 §4 claims have NO owning guardrail-conformance package with a
+  # single-sourced `const Tag` yet, so they are NOT seeded here (an honest map row must
+  # name a real Tag const, never a placeholder string the package does not single-source):
+  #   (1) resolver-hardening-as-a-unit [D42/D70/D68] — executable counterpart is the
+  #       nftgate package's NFT-4/DNS-4 `Step`/`Row` model (no `const Tag`), ALREADY scoped
+  #       by the dataplane/services/ds-dnsgate/** resolver row + the dataplane/** boundary
+  #       row above; a per-claim Tag-const package is not built, so no new row is added.
+  #   (2) flow-attribution + reconciliation [D43/D44/D69/D76, LOG-4] — suite member is the
+  #       doc 09 §7 ds-flowlog LOG-4 boundary step (a runtime control), not a guardrail-
+  #       conformance package with a `const Tag`; covered by the dataplane/** boundary row
+  #       until its per-claim package lands.
+  #   (5) confused-deputy upstream containment [D76] — doc 20 §4 / doc 12 §10 mark this as
+  #       building at Stage 3; no owning package with a `const Tag` exists yet.
+  # When those three packages land their `const Tag`, this is where their additive rows go.
+  - glob: "assurance/guardrail-conformance/passthrough/**"
+    tags: [pass-through-empty-by-default]
+  - glob: "assurance/guardrail-conformance/secretegress/**"
+    tags: [secret-egress-canary-blocked]
+
+  # ── doc 15 §11 orchestrator-owned / co-owned (c) rows (D47 per-claim seeding;
+  # SUMMARY next-action 4) ──────────────────────────────────────────────────
+  # The doc 15 §11 "Assurance hooks" bullet registers five orchestrator (c)-tier
+  # rows at the guardrail-map's per-claim seeding (D47). Their executable form is
+  # assurance/guardrail-conformance/orchctl/ — a single package owning all five rows
+  # as pure Decide/Check functions over SYNTHETIC fixtures (D50): suspend-on-breach
+  # execution (D77 taxonomy), ask-grant atomicity (doc 13 §7), skew-widening /
+  # scheduler-refusal (D72), the revocation-of-derived-state clock (D72/D68/D53),
+  # and the D74 pack-staleness canary evidence feed (co-owned for its evidence feed
+  # only). The five tags below are SINGLE-SOURCED in the package as orchctl.Tags
+  # (each a `const Tag*`), pinned by its TestTagsStable guard so the §3c table, the
+  # package, and this map name the SAME rows — the goldenfreshness / passthrough /
+  # secretegress const-Tag precedent, extended to a multi-row package. This is the
+  # same CI-scope NARROWING those rows are: a diff confined to orchctl runs these
+  # five rows instead of the full matrix, and it stays fail-closed — an unmapped path
+  # still selects the full matrix (default.unmapped) and a mis-mapped path is over-
+  # not under-covered (D47). Synthetic fixtures only (D50); rows ship in the D51
+  # public package.
+  - glob: "assurance/guardrail-conformance/orchctl/**"
+    tags: [orch-suspend-on-breach, orch-ask-grant-atomicity, orch-skew-widening-scheduler-refusal, orch-revocation-of-derived-state-clock, orch-pack-staleness-canary-evidence-feed]
+
+  # ── doc 06 §3c "Suspend-on-breach fires" row (D77 taxonomy; D46 pause budget) ──
+  # assurance/guardrail-conformance/suspendbreach/ holds the executable form of the
+  # doc 06 §3c "Suspend-on-breach fires" claim: a synthetic trip picture is diffed
+  # against the D77/D46 enforcement contract and FAILS NAMED on a suspend-class trip
+  # that did not suspend, a resume past the D46 fully-transparent pause budget, an
+  # action:block cap that suspended, or a block cap with no machine-readable in-band
+  # reason. This is the BOUNDARY-enforcement half of the suspend-on-breach claim (the
+  # orchestrator-execution half is orchctl's orch-suspend-on-breach row above); the
+  # single suspend-on-breach-fires tag is SINGLE-SOURCED as suspendbreach.Tag and
+  # pinned by its TestTagStable guard. Same CI-scope NARROWING and fail-closed posture
+  # as the rows above (D47); synthetic fixtures only (D50).
+  - glob: "assurance/guardrail-conformance/suspendbreach/**"
+    tags: [suspend-on-breach-fires]
+
+  # ── m1cluster-wave per-claim (c) packages (D47 per-claim seeding; D51 public
+  # single-sourcing; SUMMARY next-action 4) ──────────────────────────────────
+  # The m1cluster wave landed four more owning guardrail-conformance packages,
+  # each single-sourcing its tag(s) (the orchctl/suspendbreach multi-row const-Tag
+  # precedent). Each row below maps the MOST-SPECIFIC owning package glob -> that
+  # package's SINGLE-SOURCED tag(s) — its `const Tag` / `var Tags` value, pinned by
+  # the package's own TestTagStable/TestTagsStable guard so the §3c claims table,
+  # the package, and this map name the SAME rows; the scripts/check-guardrail-map-
+  # tags.sh seam lint then verifies the map<->package coupling both ways (every
+  # mapped tag is single-sourced in exactly one package; every package Tag appears
+  # in its map row). Same CI-scope NARROWING and fail-closed posture as the rows
+  # above: a diff confined to one package runs that package's row(s) instead of the
+  # full matrix, an unmapped path still selects the full matrix (default.unmapped),
+  # and a mis-mapped path is over- not under-covered (D47). Synthetic fixtures only
+  # (D50); the tags below are read back from each landed package's var Tags / const
+  # Tag, never retyped.
+  #
+  # canvas — the five doc 06 §3c / doc 17 §13(c) collaborative-canvas rows
+  # (canvas.Tags, REGISTRATION order): board edits never reach the VM, canvas is not
+  # an input channel, control-RPC attribution, boards respect directory rights, and
+  # a read-only spectator cannot inject.
+  - glob: "assurance/guardrail-conformance/canvas/**"
+    tags: [canvas-edits-never-reach-vm, canvas-not-an-input-channel, canvas-control-rpc-attribution, canvas-respects-directory-rights, spectator-cannot-inject]
+
+  # writerseat — the five sessions/10 §5 browser-writer-seat (W5) rows
+  # (writerseat.Tags, REGISTRATION order; D136/D137/D138): exactly one live writer
+  # seat, no drive without a live grant, the seat handoff is attributed + observable,
+  # a ROLE_READER cannot reach the WriterRelay RPCs (the D137 re-green of the
+  # 01KTWJ64M0 no-inject barrier with the v2 write path present), and D78 stays honest
+  # when the seat is detached. Synthetic fixtures only (D50); the tags are read back
+  # from the landed package's var Tags, never retyped.
+  # Boundary post-hoc review 2026-07-10 (W5, task 01KV9V35KJ): CONFIRMED — this row
+  # landed via landq without a code-owner gate; verified against D47 (CI-scope
+  # NARROWING only: most-specific /** glob matches the canvas sibling row precedent,
+  # an unmapped writerseat subdir still selects the full matrix via default.unmapped,
+  # coverage unchanged) and scripts/check-guardrail-map-tags.sh (all five tags are
+  # single-sourced verbatim in writerseat.go var Tags, REGISTRATION order; gate green
+  # + self-test non-vacuous). No change required.
+  - glob: "assurance/guardrail-conformance/writerseat/**"
+    tags: [writerseat-exactly-one-live-seat, writerseat-no-drive-without-live-grant, writerseat-handoff-attributed-and-observable, writerseat-reader-cannot-reach-writer-relay, writerseat-attendedness-honest-when-detached]
+
+  # netisolation — the five doc 06 §3c Stage-2 network-isolation rows
+  # (netisolation.Tags, REGISTRATION order): in-VM IP-spoofing fails, ECH/HTTPS-SVCB
+  # suppression, session A↛B no-L2-path, IPv6 closure holds while dormant + fe80
+  # probe, and controls unreachable from the VM.
+  - glob: "assurance/guardrail-conformance/netisolation/**"
+    tags: [netiso-in-vm-spoofing-fails, netiso-ech-https-svcb-suppression, netiso-session-a-not-b-no-l2-path, netiso-ipv6-closure-dormant-fe80-probe, netiso-controls-unreachable-from-vm]
+
+  # resolverhardening — the doc 20 §4 claim (1) "resolver hardening holds as a unit"
+  # (D42/D70/D68) now has a landed owning package single-sourcing its single
+  # `const Tag` (resolverhardening.Tag); the doc-20-§4 comment above noted this row
+  # would seed HERE when that package lands its `const Tag`. The D47 selector picks
+  # the SINGLE most-specific matching glob and does NOT union tag sets, so a diff
+  # confined to this package selects exactly this per-claim row, not the broader
+  # dataplane/services/ds-dnsgate/** + dataplane/** boundary rows it nominally sits
+  # under; this most-specific row carries the per-claim tag.
+  - glob: "assurance/guardrail-conformance/resolverhardening/**"
+    tags: [resolver-hardening-holds-as-unit]
+
+  # identityrows — the ten doc 16 §13 identity (c) rows not already implemented by
+  # credswap/secretegress/appinstall (identityrows.Tags, REGISTRATION order):
+  # mint-before-attach, per-session CA isolation, issued-cred routing asymmetry,
+  # fleet revocation clock, validation-failure structured 403, socket-hold paths,
+  # attendedness flip, git-HTTPS pin, LOG-5 join, and park/resume tiers.
+  - glob: "assurance/guardrail-conformance/identityrows/**"
+    tags: [identity-mint-before-attach, identity-per-session-ca-isolation, identity-issued-cred-routing-asymmetry, identity-fleet-revocation-clock, identity-validation-failure-structured-403, identity-socket-hold-paths, identity-attendedness-flip, identity-git-https-pin, identity-log5-join, identity-park-resume-tiers]
+
+  # logreconcile — the doc 06 §3c "per-session stream-reconciliation" (c) row,
+  # suite member LOG-4 (doc 09 §7; D43/D44/D72). The owning package landed with a
+  # single-sourced `const Tag` and its own TestTagStable guard; logreconcile.go's
+  # comment notes its glob row seeds HERE at the first per-claim seeding. The tag
+  # below is READ BACK from that package's `const Tag` (logreconcile.Tag =
+  # per-session-stream-reconciliation), never retyped from memory; check-guardrail-
+  # map-tags.sh then verifies the map<->package coupling. Same most-specific-glob
+  # NARROWING and fail-closed posture as the rows above — the D47 selector picks the
+  # SINGLE most-specific matching glob and does NOT union with broader globs; an
+  # unmapped path still selects the full matrix (default.unmapped) and a mis-mapped
+  # path is over- not under-covered. Synthetic fixtures only (D50).
+  - glob: "assurance/guardrail-conformance/logreconcile/**"
+    tags: [per-session-stream-reconciliation]
+
+  # credswap — the doc 06 §3c "credential swap never leaks long-lived secrets" (c)
+  # row (D8, doc 02 §6; D39/D83, doc 16 §13 "Cred-never-in-VM/host"). The owning
+  # package single-sources its `const Tag` (credswap.Tag = cred-swap-never-leaks),
+  # pinned by its TestTagStable guard; the tag below is READ BACK from that const,
+  # never retyped. Same most-specific-glob NARROWING and fail-closed posture as the
+  # rows above — the D47 selector picks the SINGLE most-specific matching glob and
+  # does NOT union with the broader globs; an unmapped path still selects the full
+  # matrix (default.unmapped) and a mis-mapped path is over- not under-covered.
+  # Synthetic fixtures only (D50); the package encodes BOTH the swap-class absence
+  # claim and the inject-class TTL/ISSUED-digest twin (doc 20 §7.3).
+  - glob: "assurance/guardrail-conformance/credswap/**"
+    tags: [cred-swap-never-leaks]
+
+  # credttl — the inject-class **credential-TTL bound** half of the doc 06 §3c
+  # "credential swap never leaks long-lived secrets" twin ("Inject-class (STS-style
+  # short-lived) creds assert the TTL bound"; doc 16 §5.1/§5.4 TTL-as-revocation,
+  # the token-TTL + grant-TTL freshness legs; D8/D39/D51). The credswap row above
+  # encodes the swap-class absence claim (and nominally the inject-class twin); this
+  # standalone package promotes ONLY the TTL bound into a runnable D51 row — a
+  # synthetic presentation's two horizons {token_ttl_unix, grant_ttl_unix} are
+  # diffed against the validation fence and FAIL on TOKEN-EXPIRED / GRANT-EXPIRED /
+  # UNDECIDABLE, mirroring the production reference validator's two `credential_expired`
+  # legs (identity-validate/refimpl.go HonestDecision steps 3 and 4). The owning
+  # package single-sources its `const Tag` (credttl.Tag = identity-inject-class-ttl-
+  # bound), pinned by its TestTagStable guard; the tag below is READ BACK from that
+  # const, never retyped, and check-guardrail-map-tags.sh verifies the map<->package
+  # coupling. Same most-specific-glob NARROWING and fail-closed posture as the rows
+  # above — the D47 selector picks the SINGLE most-specific matching glob and does
+  # NOT union with the broader globs; an unmapped path still selects the full matrix
+  # (default.unmapped) and a mis-mapped path is over- not under-covered. Synthetic
+  # fixtures only (D50). The `ISSUED{service_id}` digest half of the inject-class
+  # twin is a separate row (doc 16 §6/§10), not this one.
+  - glob: "assurance/guardrail-conformance/credttl/**"
+    tags: [identity-inject-class-ttl-bound]
+
+  # injectdigest — the inject-class **ISSUED{service_id} wrong-destination
+  # egress-block** half of the doc 06 §3c "credential swap never leaks long-lived
+  # secrets" twin ("Inject-class (STS-style short-lived) creds assert … the
+  # presence of the `ISSUED{service_id}` digest" so wrong-destination egress
+  # blocks; doc 16 §5.1/§6/§10 — a digest's intended service is a grant fact, and
+  # the keyed-issued-to-wrong-destination event is block+log; D8/D51/D73). The
+  # credttl row above promotes the TTL half of the twin; this standalone package
+  # promotes ONLY the digest/wrong-destination half into a runnable D51 row — a
+  # synthetic presentation's {issued_service_id, egress_destination, blocked} is
+  # diffed against the destination fence its issued service names and FAILS on
+  # WRONG-DESTINATION-EGRESSED / INTENDED-DESTINATION-BLOCKED / UNDECIDABLE,
+  # mirroring the production swap/scan filter-ordering interlock (doc 16 §5.5 step
+  # 7 / §10). The owning package single-sources its `const Tag` (injectdigest.Tag =
+  # identity-inject-class-wrong-destination-blocked), pinned by its TestTagStable
+  # guard; the tag below is READ BACK from that const, never retyped, and
+  # check-guardrail-map-tags.sh verifies the map<->package coupling. Same
+  # most-specific-glob NARROWING and fail-closed posture as the rows above — the
+  # D47 selector picks the SINGLE most-specific matching glob and does NOT union
+  # with the broader globs; an unmapped path still selects the full matrix
+  # (default.unmapped) and a mis-mapped path is over- not under-covered. Synthetic
+  # fixtures only (D50). The TTL-bound half of the inject-class twin is the
+  # separate credttl row above, not this one.
+  - glob: "assurance/guardrail-conformance/injectdigest/**"
+    tags: [identity-inject-class-wrong-destination-blocked]
+
+  # ── M0 network-boundary + onboarding (c) packages — the two guardrail-
+  # conformance packages that predate the per-claim `const Tag` discipline and
+  # rode default.unmapped (full-matrix) with no explicit row (D47 per-package
+  # seeding; SUMMARY next-action 4) ─────────────────────────────────────────
+  # Both packages single-source their row identity differently from the const-Tag
+  # packages above (README.md "typed `Row` / claim identity (no `const Tag`)"),
+  # so each row below names that package's ACTUAL single-sourced literal(s) — the
+  # values check-guardrail-map-tags.sh matches verbatim in the package's non-test
+  # *.go, exactly as the README "The row split" table enumerates them. Same
+  # CI-scope NARROWING and fail-closed posture as the rows above: a diff confined
+  # to one package runs that package's row(s) instead of the full matrix, an
+  # unmapped path still selects the full matrix (default.unmapped), and a
+  # mis-mapped path is over- not under-covered (D47). Synthetic fixtures only
+  # (D50); vocabulary stays assurance-not-redteam (doc 06 §3c).
+  #
+  # nftgate — the five doc 06 §3c M0 network-boundary rows (doc 09 §9 NFT-1 /
+  # NFT-3 / NFT-4 / DNS-4 / POL-2; D4/D68/D70), single-sourced as nftgate's typed
+  # `Row = "<row>"` literals (RowDefaultDeny … RowQUICReject): default-deny
+  # outbound, DNS rebinding fails, DoH/DoT bypass fails, port-53 redirect holds,
+  # and QUIC udp/443 rejected-not-dropped. The D47 selector picks the SINGLE
+  # most-specific matching glob and does NOT union tag sets, so a diff confined to
+  # this package selects exactly these five M0 rows, not the broader
+  # dataplane/services/ds-dnsgate/** + dataplane/** boundary rows it nominally sits
+  # under; this most-specific row carries the five M0 rows.
+  - glob: "assurance/guardrail-conformance/nftgate/**"
+    tags: [default-deny-outbound, dns-rebinding-fails, doh-dot-bypass-fails, port-53-redirect-holds, quic-udp443-reject-not-drop]
+
+  # appinstall — the single doc 16 §13 "App-install read-level subset" claim
+  # (doc 16 §5.2; D83/D56/D115). The package carries no `const Tag`; its row
+  # identity is the claim itself, with its failure modes typed as `ViolationClass`
+  # constants — so this row names those three single-sourced ViolationClass
+  # literals (the values check-guardrail-map-tags.sh matches in appinstall.go and
+  # the README "The row split" table lists): an onboarding-path permission above
+  # read level, a write scope on the onboarding read path, and a requested
+  # permission absent from the §5.2 inventory. The D47 selector picks the SINGLE
+  # most-specific matching glob and does NOT union tag sets, so a diff confined to
+  # this package selects exactly these three rows, not the broader globs it
+  # nominally sits under; an unmapped path still selects the full matrix
+  # (default.unmapped) and a mis-mapped path is over- not under-covered.
+  - glob: "assurance/guardrail-conformance/appinstall/**"
+    tags: [onboarding-path-above-read-level, write-scope-on-onboarding-read-path, permission-absent-from-inventory]
+
+  # ── e2e (b) session-lifecycle tier (doc 06 §3b; D24 (b)) ───────────────────
+  # assurance/e2e/ is the D24 (b) LIFECYCLE suite (README.md), NOT a guardrail
+  # (c)-tier surface — guardrail/bypass-fails claims live in
+  # guardrail-conformance/ (the README "What must NOT live here" fence). It asserts
+  # lifecycle budgets + the digest-continuity no-gap ordering against the FROZEN
+  # identity.v1 seam; its only live leg (the metal-only host-redeploy drive) is
+  # env-gated behind DS_DIGEST_HANDOFF_LIVE and never runs in CI/wave (D50). So a
+  # diff confined here triggers no guardrail-assurance rows — like docs/, an empty
+  # tag set. This is a CI-scope NARROWING only: an unmapped path still selects the
+  # full matrix (default.unmapped) and a mis-mapped path is over- not under-covered,
+  # so the row stays fail-closed (D47).
+  - glob: "assurance/e2e/**"
+    tags: []
+
+  # ── TLS-3 conformance adapter (D17/D82; doc 12 §3; doc 09 §5 TLS-3) ──────────
+  # assurance/conformance-adapter/tlsproxyinspect/ wires the real ds-tlsproxy
+  # TLS-3 plane (per-session-CA termination + strict-WebPKI re-origination)
+  # behind the boundary/tlsproxy seams — the doc 06 proxy-conformance done-when.
+  # It exercises the same guarantees as the boundary/** and dataplane/** rows it
+  # drives, so it carries their tag set. This path rode the safe unmapped =>
+  # full-matrix default (default.unmapped) before this row, so mapping it only
+  # NARROWS CI scope to the boundary set (never a coverage change) and stays
+  # fail-closed per D47 (an unmapped path still selects the full matrix; a
+  # mis-mapped path is over- not under-covered).
+  - glob: "assurance/conformance-adapter/tlsproxyinspect/**"
+    tags: [boundary-conformance, boundary-guardrail]
+
+  # ── ds-nethelper — the ROOT-HELPER privileged write-path front (D148, ratified
+  # 2026-07-30; doc 14 §6 linker set now "only ds-dnsgate / ds-nethelper") ───────────
+  # The helper fronts EXACTLY the CAP_NET_ADMIN subset of the ds-nft write edge (five
+  # write verbs + the read-only probe; live backend ungated by D148). Mapped to
+  # [full-matrix] DELIBERATELY — this is NOT a narrowing: a diff to a privileged-edge
+  # component is a contract-grade event, and no per-claim guardrail-conformance package
+  # with a single-sourced `const Tag` exists for it yet (the doc 20 §4 honest-map rule —
+  # never a placeholder tag the package does not single-source). Unmapped paths would
+  # already fail closed to the full matrix (D47); like the proto/dreamserpent/auth/v1
+  # row, this row exists as explicit documentation of intent. When the live backend
+  # lands (post-ratification), seed the per-claim package + Tag and narrow then.
+  - glob: "orchestrator/cmd/ds-nethelper/**"
+    tags: [full-matrix]
+  - glob: "orchestrator/internal/nethelper/**"
+    tags: [full-matrix]

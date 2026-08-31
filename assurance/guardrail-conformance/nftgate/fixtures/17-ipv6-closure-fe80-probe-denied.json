@@ -1,0 +1,7 @@
+{
+  "row": "ipv6-closure-dormant-posture-holds",
+  "kind": "v6-reach-dormant-posture",
+  "dst_ip": "fe80::1",
+  "want": "deny-v6-dormant-boundary-host",
+  "why": "v6-closure boundary-host proof: an IPv6 fe80 link-local sibling probe from a VM interface in the dormant-v6 posture is denied at the boundary host netns — not the guest sysctl — so the closure survives a guest that re-enables v6 (doc 06 §3c v6-closure; NFT-1, D75 nightly fe80 sibling-probe row)"
+}

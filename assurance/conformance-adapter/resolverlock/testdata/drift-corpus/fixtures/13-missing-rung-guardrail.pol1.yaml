@@ -1,0 +1,21 @@
+# drift class: a guardrail rule omits its mandatory rung.
+# named edge shape: missing rung (on a guardrail rule, vs. fixture 05 which is a
+#   missing rung on a BLOCKLIST entry — the two readers police different rungs).
+# expected verdict (go, rust) = (accept, reject)
+# Rust: MissingRung — every guardrail rule must declare a rung (§7 (a) / D53); the
+#     GuardrailRule.rung field is non-optional and the reader rejects its absence.
+# Go: the resolver-lock scanner reads only the blocklist; guardrails are invisible
+#     to it. The Rust schema parser is the guardrail-rung tripwire. The PAIR
+#     (05 reject/accept, 13 accept/reject) documents that "missing rung" lands on
+#     OPPOSITE readers depending on which section drifts.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+guardrails:
+  - id: egress-rate-1
+    class: egress
+blocklist:
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

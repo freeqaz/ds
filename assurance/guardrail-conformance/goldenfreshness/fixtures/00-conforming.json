@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthetic CONFORMING golden manifest: a 24h rotation window with every opted-in (repo, branch) golden present and within the window. The check must pass (zero violations) on this fixture — the CVE-roll SLA holds.",
+  "policy": { "max_age_hours": 24 },
+  "goldens": [
+    { "repo": "acme/monorepo", "branch": "main",    "present": true, "age_hours": 2 },
+    { "repo": "acme/monorepo", "branch": "release",  "present": true, "age_hours": 23 },
+    { "repo": "acme/service",  "branch": "main",    "present": true, "age_hours": 0 }
+  ]
+}

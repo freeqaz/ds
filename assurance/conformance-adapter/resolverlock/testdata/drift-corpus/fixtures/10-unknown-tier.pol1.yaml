@@ -1,0 +1,20 @@
+# drift class: a baseline-pack family declares an unknown tier token.
+# named edge shape: unknown tier.
+# expected verdict (go, rust) = (accept, reject)
+# Rust: BadValue — Tier::parse rejects any token outside {enabled, disabled}.
+# Go: the resolver-lock scanner only reads the top-level `blocklist:` section; it
+#     never inspects baseline_pack families, so an unknown tier is invisible to it
+#     and the blocklist still extracts cleanly. This is the MIRROR complementary
+#     case to 01-08: the Rust schema parser guards pack-schema drift the Go
+#     offline half is blind to.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+baseline_pack:
+  families:
+    core: { tier: turbo }
+blocklist:
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

@@ -1,0 +1,7 @@
+{
+  "row": "default-deny-outbound",
+  "kind": "l3l4-direct-connect",
+  "dst_ip": "203.0.113.10",
+  "want": "allow",
+  "why": "the allowlisted control: 203.0.113.10 is admitted for api.allowed.example (NFT-3 Stage-1 IP set), so the L3/4 connect is admitted; proves the deny is the default, not a blanket block (D4)"
+}

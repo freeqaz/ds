@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "interactions": [
+    {
+      "key": "claude-synthetic-test-1|turns=1|say hi|29962b6fce6480c1",
+      "normalized": {
+        "method": "POST",
+        "path": "/v1/messages",
+        "model": "claude-synthetic-test-1",
+        "system": "You are a synthetic test fixture. No real model, no real text.",
+        "sequence": [
+          {
+            "role": "user",
+            "content": "say hi"
+          }
+        ]
+      },
+      "status_code": 200,
+      "headers": {
+        "content-type": "text/event-stream"
+      },
+      "body": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_SYNTHETIC_0001\",\"model\":\"claude-synthetic-test-1\",\"role\":\"assistant\",\"content\":[]}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello from the synthetic cassette.\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+    },
+    {
+      "key": "claude-synthetic-test-1|turns=3|and again|a213b50d7ad5122b",
+      "normalized": {
+        "method": "POST",
+        "path": "/v1/messages",
+        "model": "claude-synthetic-test-1",
+        "system": "You are a synthetic test fixture. No real model, no real text.",
+        "sequence": [
+          {
+            "role": "user",
+            "content": "say hi"
+          },
+          {
+            "role": "assistant",
+            "content": "Hello from the synthetic cassette."
+          },
+          {
+            "role": "user",
+            "content": "and again"
+          }
+        ]
+      },
+      "status_code": 200,
+      "headers": {
+        "content-type": "text/event-stream"
+      },
+      "body": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_SYNTHETIC_0002\",\"model\":\"claude-synthetic-test-1\",\"role\":\"assistant\",\"content\":[]}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Synthetic reply two.\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+    }
+  ]
+}

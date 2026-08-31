@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthetic VIOLATION (b): a WRITE scope on the onboarding read path. contents:write is requested on the onboarding flow — the read path may carry no write scope of any kind (no contents:write, no actions:write, no enrollment-flow write authority). Must FAIL with the named class write-scope-on-onboarding-read-path.",
+  "requested": [
+    { "permission": "contents:read",  "level": "read",  "flow": "onboarding CI-run-metadata read" },
+    { "permission": "actions:read",   "level": "read",  "flow": "onboarding CI-run-metadata read" },
+    { "permission": "metadata:read",  "level": "read",  "flow": "onboarding CI-run-metadata read" },
+    { "permission": "contents:write", "level": "write", "flow": "onboarding CI-run-metadata read" }
+  ]
+}

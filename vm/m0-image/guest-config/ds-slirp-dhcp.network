@@ -1,0 +1,44 @@
+# ds-slirp-dhcp.network — systemd-networkd DHCP egress for the M0-minimal SLIRP/dev
+# NIC. Fixes the no-IP/no-DNS SLIRP hang: a SLIRP-NIC guest with no DHCP client gets
+# no address and no resolver, so Claude Code loops on `api_retry error=unknown`
+# forever (looks like a hang; live-found 2026-06-18).
+#
+# GATED TO THE SLIRP PATH — this file is NOT baked into any systemd-networkd search
+# directory (/etc, /run, /usr/lib under systemd/network). build-m0-image.sh stages
+# it at M0_SLIRP_NETWORK_STAGE (/usr/local/share/ds/…, OUTSIDE those dirs). Only
+# ds-slirp-net.service copies it into /run/systemd/network + `networkctl reload`,
+# and that unit runs ONLY when the routed-tap signal ds-net.env is ABSENT
+# (ConditionPathExists=!…/ds-net.env). Consequences:
+#
+#   - ROUTED-TAP boot: ds-net.env is present, ds-slirp-net.service is SKIPPED, this
+#     .network is NEVER placed in networkd's search path. networkd therefore has no
+#     .network matching the tap NIC and manages nothing — ds-netcfg.service owns the
+#     static per-session apply. The [Match] below PROVABLY CANNOT catch the routed
+#     tap: on that boot the file is never loaded, so its match never evaluates. This
+#     is why the guest can share NIC names between the SLIRP NIC and the routed tap
+#     without a DHCP-vs-static race (there is no static [Match] property that tells a
+#     virtio-net SLIRP NIC apart from a virtio-net tap; the ds-net.env presence gate
+#     is the only reliable boot-time signal, and it lives on the SERVICE, not here).
+#   - SLIRP/dev boot: ds-net.env is absent, ds-slirp-net.service installs this file
+#     and reloads networkd, which matches + DHCPs the SLIRP NIC.
+#
+# MATCH: the SLIRP NIC is `eth0` under net.ifnames=0 (the rootless / direct-kernel
+# boot — build-m0-image-rootless.sh, scripts/nested-testbed/inside-l1/l2-up.sh) AND
+# an `en*` predictable name under default naming (the grub boot — build-m0-image.sh).
+# Match BOTH; `lo` is never matched. The en* half is single-sourced from
+# M0_EGRESS_NIC_GLOB (the same glob ds-apply-netcfg and the D75 v6 drop-in target);
+# `eth0` is the fixed net.ifnames=0 name. build-m0-image.sh substitutes
+# __EGRESS_NIC_GLOB__ at bake time.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[Match]
+Name=eth0 __EGRESS_NIC_GLOB__
+
+[Network]
+# v4-only DHCP: the SLIRP userspace stack (e.g. qemu -netdev user) runs a built-in
+# DHCP + DNS on 10.0.2.x, so this leases an address + resolver with no external
+# server. D75 keeps the guest interior v4-only, so no IPv6 link-local either.
+DHCP=ipv4
+LinkLocalAddressing=ipv4
+IPv6AcceptRA=no

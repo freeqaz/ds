@@ -1,0 +1,41 @@
+[package]
+name = "contract-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# A TEST-ONLY workspace member (auto-included by `members = ["crates/*"]` in
+# dataplane/Cargo.toml — that manifest is NOT edited). It ships ZERO production
+# code: `src/lib.rs` is an empty crate, and every assertion lives under
+# `tests/`. Its only reason to exist is to be the ONE place in the workspace
+# that may depend on BOTH `flush_session` consumers at once.
+#
+# D76 frozen non-edge (doc 12 §4.2, doc 14 §5): ds-tlsproxy must NEVER gain a
+# ds-nft edge, and ds-nft must never gain a ds-tlsproxy edge — the proxy runs
+# CAP_NET_RAW only and must not link the netlink writer that contains it. That
+# rule forbids either consumer from importing the other to write a cross-consumer
+# test. This crate is the exception the rule leaves open: a downstream test-only
+# member can path-depend on both and exercise the shared frozen
+# `ds_contracts::flush::DstKey` contract across them, without adding any edge
+# between the two consumers.
+
+[dependencies]
+# Deliberately EMPTY — this member ships no production code, so it has no
+# runtime dependencies. The consumer crates are dev-dependencies only.
+
+[dev-dependencies]
+# Path-deps on the frozen contract and the D72 apply consumers — workspace
+# path-deps only, no crates.io. This is the only manifest in the workspace that
+# names ds-nft, ds-tlsproxy AND ds-dnsgate at once; every cross-consumer edge
+# stays here and never crosses between the consumer crates themselves (D76).
+ds-contracts = { path = "../ds-contracts" }
+ds-nft = { path = "../ds-nft" }
+ds-tlsproxy = { path = "../../services/ds-tlsproxy" }
+# ds-dnsgate (the D72 ADMITTER) joins as a dev-dep for the LOG-4 policy-skew
+# conformance test (src/pol4_skew_test.rs), which needs BOTH the enforcer
+# (ds-tlsproxy) and the admitter (ds-dnsgate) consumers to assert
+# `version(TLS decision) >= version(DNS admission)` across an apply. Same D76
+# exception as the other consumer edges: hosted ONLY here, adds NO edge between
+# ds-dnsgate and ds-tlsproxy themselves (each still ignorant of the other).
+ds-dnsgate = { path = "../../services/ds-dnsgate" }

@@ -1,0 +1,128 @@
+# repos.yaml — declarative manifest of the per-ecosystem PROXY repositories the
+# site-local cache exposes. This is the config-as-code desired state; bootstrap.sh
+# reads it and applies each entry against the Nexus REST API (idempotent).
+#
+# Every repository here is a PROXY (pull-through) repo: a cache miss fetches from
+# the declared `remote`, stores the blob, and serves the hit thereafter. There
+# are NO hosted/private repos and NO registry semantics implemented locally
+# (D41) — Nexus is the off-the-shelf cache; we only declare which upstreams it
+# fronts and on what endpoint each is reachable.
+#
+# Endpoint column is the path a golden-image client hits (see ../wiring/*). The
+# host alias `cache.ds.local` resolves, in the session VM, to the cache host via
+# the egress boundary's allow-set; ports match deploy/nexus.container.
+#
+# Upstream-only-on-miss is the default proxy behavior; the cache never reaches
+# upstream for a blob it already holds. Negative-cache TTLs are kept short so a
+# package that appears upstream after a miss is picked up on the next pull.
+
+# --- npm -------------------------------------------------------------------
+- name: npm-proxy
+  format: npm
+  type: proxy
+  remote: https://registry.npmjs.org/
+  endpoint: http://cache.ds.local:8081/repository/npm-proxy/
+  wiring: ../wiring/npmrc
+  online: true
+  negativeCacheTTLMinutes: 15
+  notes: >
+    Fronts the public npm registry. Golden-image .npmrc points `registry` here.
+    Scoped packages resolve through the same proxy; no per-scope config needed.
+
+# --- PyPI ------------------------------------------------------------------
+- name: pypi-proxy
+  format: pypi
+  type: proxy
+  remote: https://pypi.org/
+  endpoint: http://cache.ds.local:8081/repository/pypi-proxy/
+  wiring: ../wiring/pip.conf
+  online: true
+  negativeCacheTTLMinutes: 15
+  notes: >
+    Fronts PyPI. pip.conf `index-url` uses the `/simple/` child of this
+    endpoint (PEP 503 simple API); see ../wiring/pip.conf.
+
+# --- Go module proxy -------------------------------------------------------
+- name: go-proxy
+  format: go
+  type: proxy
+  remote: https://proxy.golang.org/
+  endpoint: http://cache.ds.local:8081/repository/go-proxy/
+  wiring: ../wiring/go.env
+  online: true
+  negativeCacheTTLMinutes: 15
+  notes: >
+    Fronts the public Go module mirror. GOPROXY points here; GOSUMDB stays on
+    sum.golang.org reached THROUGH this proxy (Nexus go proxy serves the
+    checksum-db passthrough), so module integrity verification is preserved.
+
+# --- OCI / container images ------------------------------------------------
+- name: docker-proxy
+  format: docker
+  type: proxy
+  remote: https://registry-1.docker.io
+  endpoint: cache.ds.local:5000
+  httpPort: 5000
+  wiring: ../wiring/registries.conf
+  online: true
+  negativeCacheTTLMinutes: 15
+  notes: >
+    Fronts Docker Hub on its own connector port :5000. containers/registries.conf
+    sets this as a mirror for docker.io with pull-through only. For registries
+    other than Docker Hub (ghcr.io, quay.io), add sibling docker proxy repos on
+    additional connector ports and a matching registries.conf [[registry]] block;
+    one mirror endpoint cannot front multiple upstreams.
+
+# --- OCI / GitHub Container Registry (ghcr.io) -----------------------------
+# DISABLED BY DEFAULT. No golden image (../../golden/) currently pulls from
+# ghcr.io, so this connector stays defined-but-unopened to avoid a live unused
+# port. To enable: uncomment this block, the ghcr-proxy create_proxy call in
+# deploy/bootstrap.sh, the ghcr-proxy PublishPort in deploy/nexus.container, and
+# the ghcr.io mirror block in ../wiring/registries.conf — all four must agree on
+# port :5001, and lint-image-drift.sh fails closed the moment the registries.conf
+# stanza goes active and any one of them disagrees. The port literals below are
+# what that guard reconciles; they stay inert while this block is commented.
+# Same cache-everything-pulled (D41) pull-through semantics as docker-proxy;
+# distinct connector per upstream (one mirror = one upstream).
+# - name: ghcr-proxy
+#   format: docker
+#   type: proxy
+#   remote: https://ghcr.io
+#   endpoint: cache.ds.local:5001
+#   httpPort: 5001
+#   wiring: ../wiring/registries.conf
+#   online: true
+#   negativeCacheTTLMinutes: 15
+#   notes: >
+#     Fronts the GitHub Container Registry on its own connector port :5001.
+#     containers/registries.conf sets this as the docker.io-style mirror for
+#     ghcr.io with pull-through only; the cache reaches ghcr.io over TLS on a
+#     miss and serves the stored blob thereafter (D41 buy-not-build, config
+#     only). Distinct from :5000 (Docker Hub) and :5002 (quay.io).
+
+# --- OCI / Quay (quay.io) --------------------------------------------------
+# DISABLED BY DEFAULT. No golden image (../../golden/) currently pulls from
+# quay.io, so this connector stays defined-but-unopened to avoid a live unused
+# port. To enable: uncomment this block, the quay-proxy create_proxy call in
+# deploy/bootstrap.sh, the quay-proxy PublishPort in deploy/nexus.container, and
+# the quay.io mirror block in ../wiring/registries.conf — all four must agree on
+# port :5002, and lint-image-drift.sh fails closed the moment the registries.conf
+# stanza goes active and any one of them disagrees. The port literals below are
+# what that guard reconciles; they stay inert while this block is commented.
+# Same cache-everything-pulled (D41) pull-through semantics as docker-proxy;
+# distinct connector per upstream (one mirror = one upstream).
+# - name: quay-proxy
+#   format: docker
+#   type: proxy
+#   remote: https://quay.io
+#   endpoint: cache.ds.local:5002
+#   httpPort: 5002
+#   wiring: ../wiring/registries.conf
+#   online: true
+#   negativeCacheTTLMinutes: 15
+#   notes: >
+#     Fronts Quay on its own connector port :5002. containers/registries.conf
+#     sets this as the docker.io-style mirror for quay.io with pull-through
+#     only; the cache reaches quay.io over TLS on a miss and serves the stored
+#     blob thereafter (D41 buy-not-build, config only). Distinct from :5000
+#     (Docker Hub) and :5001 (ghcr.io).

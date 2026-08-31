@@ -1,0 +1,1 @@
+{"ds_fixture":{"provenance":"synthetic","seam":"guardrail-conformance/nftgate quic-udp443-reject-not-drop (doc 06 §3c; D70, NFT-4)","created":"2026-06-13","note":"hand-authored QUIC case: udp/443 is rejected with ICMP port-unreachable and counted per session, never silently dropped; documentation-range address (RFC 5737), never a live destination (D50)."}}

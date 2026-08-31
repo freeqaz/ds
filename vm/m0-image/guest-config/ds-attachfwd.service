@@ -1,0 +1,76 @@
+# ds-attachfwd.service — the guest-side attach CARRIAGE forwarder boot wiring
+# (gap-3 guest side, M0; runtime.v1 AttachWiring OQ-C carriage, doc 15 §5.4).
+#
+# The forwarder (vm/attachfwd, baked at M0_ATTACHFWD_PATH) bridges the guest-local
+# attach event-socket UDS — which ds-entrypoint emits CC stdio onto
+# (vm/entrypoint/transport.go; AttachWiring.event_socket_path) — to an AF_VSOCK carriage
+# the HOST-AGENT's per-session attach bridge dials over virtio-vsock at
+# guestCID:M0_ATTACH_PORT (orchestrator/internal/hostagent/attachbridge.go). It is a 1:1
+# byte splice and nothing else: the D61 fan-out, token-auth, and writer-seat all live
+# HOST-SIDE at the host-agent attach Server (the guest is the untrusted runtime —
+# enforcement must not live here). RUNTIME-AGNOSTIC (D20/D38).
+#
+# THE HOST<->GUEST CARRIAGE IS VSOCK, NOT IP: the host-agent dials the guest's
+# deterministic per-session AF_VSOCK CID (Binding.VsockCID), so there is no tap/IP/nft
+# allow in this path — the vsock control channel is reachable by construction once the
+# domain's vsock device is wired (orchestrator live.go pins <cid auto='no' address=N/>).
+# This unit only LISTENs on AF_VSOCK; it depends on the guest virtio-vsock transport
+# (/dev/vsock), declared in [Unit] below.
+#
+# ORDERING: the forwarder is the SERVER on the guest UDS, so it must be listening
+# BEFORE ds-entrypoint dials it.
+#   Before=ds-entrypoint.service  — forwarder up before the entrypoint connects.
+#   WantedBy=ds-entrypoint.service — the forwarder is the entrypoint's carriage; a
+#                                    booted entrypoint wants its forwarder. (Wants,
+#                                    not Requires: a forwarder hiccup should not
+#                                    fail-closed the whole boot — a not-yet-carried
+#                                    session is still a valid booted session whose
+#                                    attach leg can be retried, the attachbridge.go
+#                                    best-effort posture.)
+#
+# build-m0-image.sh substitutes the concrete forwarder path / UDS path / AF_VSOCK port
+# for the __ATTACHFWD_PATH__ / __ATTACHFWD_UDS_PATH__ / __ATTACH_PORT__ tokens at
+# bake time (single-sourced from m0-image.env). Until vm/attachfwd is staged the
+# unit is fail-closed at boot (ConditionFileIsExecutable), the expected M0-skeleton
+# state boot-validate.sh reports as such rather than a failure (the same posture as
+# ds-entrypoint.service).
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[Unit]
+Description=Dream Serpent guest attach carriage forwarder (gap-3, doc 15 §5.4)
+Documentation=https://github.com/dream-serpent/dream-serpent/blob/main/vm/attachfwd/README.md
+# The carriage is virtio-vsock, NOT TCP/IP (the forwarder LISTENs on AF_VSOCK at
+# VMADDR_CID_ANY:__ATTACH_PORT__ and the host-agent dials guestCID:port). So it needs
+# NO guest IP network — the prior After/Wants=network-online.target was a TCP-only
+# dependency that no longer applies (a vsock listener never waits on DHCP/routes).
+# What it DOES need is the virtio-vsock guest transport loaded, which exposes the
+# /dev/vsock char device; gate on that instead so the unit fails closed if the guest
+# was booted without the vsock device (the same M0-skeleton fail-closed posture as the
+# binary-staging condition below).
+After=systemd-modules-load.service
+ConditionPathExists=/dev/vsock
+# Up before the entrypoint dials the UDS this forwarder serves.
+Before=ds-entrypoint.service
+# Fail closed if the forwarder binary was never staged (M0 skeleton state).
+ConditionFileIsExecutable=__ATTACHFWD_PATH__
+
+[Service]
+Type=simple
+# LISTEN on the guest-local UDS (ds-entrypoint dials it) and the AF_VSOCK carriage
+# (the host-agent attach bridge dials it at guestCID:__ATTACH_PORT__ over virtio-vsock).
+ExecStart=__ATTACHFWD_PATH__ --uds-path __ATTACHFWD_UDS_PATH__ --vsock-port __ATTACH_PORT__
+# The carriage is the session's attach path; if it dies, let it come back so a
+# re-attach reconnects (the host-agent's bridge re-dials). Distinct from the
+# entrypoint, which is the session's reason to exist (Restart=no there).
+Restart=on-failure
+RestartSec=1
+# Run as the same unprivileged guest user the entrypoint runs as, not root.
+User=ds
+Group=ds
+
+[Install]
+WantedBy=multi-user.target
+# Pull the carriage into the entrypoint's graph too. WantedBy/RequiredBy are
+# [Install] directives — systemd IGNORES them in [Unit] (live-found 2026-06-17).
+WantedBy=ds-entrypoint.service

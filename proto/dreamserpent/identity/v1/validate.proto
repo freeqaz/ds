@@ -1,0 +1,130 @@
+// The D22 identity-validation seam (doc 16 §4 / §9).
+//
+// One frozen `Validate` contract is what makes the Identity substrate
+// progression — M0 throwaway shim -> M1 own minimal CA -> M3 SPIFFE/SPIRE — a
+// substrate swap behind a frozen contract, not a rebuild (D22; doc 05 §7 edge
+// 5). Every substrate plus customer-IdP-backed identities satisfies this exact
+// D24-versioned contract.
+//
+// Stage-0 freeze seam (doc 16 §9, FREEZE.md `dreamserpent.identity.v1` row).
+syntax = "proto3";
+
+package dreamserpent.identity.v1;
+
+// The canonical SessionRef (D66/D44) — owned by dreamserpent.boundary.v1,
+// imported at the Stage-0 freeze-PR session-ref unification, never redefined
+// in this package (doc 14 §2/§4). Both Stage-0 packages freeze together
+// (doc 16 §9), so the cross-package import is resolvable by construction.
+import "dreamserpent/boundary/v1/session_ref.proto";
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/identity/v1;identityv1";
+
+// IdentityValidationService is the D22 sidecar seam, consumed by ds-tlsproxy on
+// the TLS-5 swap path (doc 16 §4 / §9). The `IdentityValidation` service name in
+// doc 16's prose sketch is rendered here with the proto house-style `Service`
+// suffix (buf STANDARD); the seam identity is the D22 contract, unchanged.
+//
+// SYNC, session-liveness semantics: a single in-line call on the swap path.
+// `Validate` checks signature + freshness + SESSION LIVENESS + grant lookup
+// (doc 16 §4). The session-liveness check is what makes a stolen-but-unexpired
+// credential fail immediately on suspend/kill/admin-revoke — the minimal CA
+// ships no CRL/OCSP, so liveness, not revocation, is the catch (doc 16 §5.4).
+//
+// SWAP-PATH LATENCY BUDGET: `Validate` sits in-line on the TLS-5 swap path, so
+// its round trip is paid per swapped flow and is held to a swap-path latency
+// budget (doc 16 §4 / §9). Grant fetch is per-grant and cached <= session
+// (D39), never per-request, so steady-state swapped requests pay zero added RTT
+// beyond this validation hop (doc 16 §5.1).
+service IdentityValidationService {
+  // Validate authorizes one swap-path credential presentation.
+  //
+  // FAILURE SURFACE: a DENY verdict surfaces to the agent as the in-band
+  // structured 403 (D77 block+log default) — never a silent drop and never a
+  // VM suspension for an ordinary policy question (doc 16 §4, §11.1 step 3).
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+}
+
+// ValidateRequest is the swap executor's presentation at the D22 seam
+// (doc 16 §4 / §9 / §11.1 step 3).
+message ValidateRequest {
+  // The credential presented by the swap executor. FORMAT-OPAQUE at the D22
+  // seam (doc 16 §4, doc 19 §5/§6): the M0 throwaway-shim token, the M1 X.509 /
+  // JWT presentation, and the doc 19 scoped session token (Biscuit primary,
+  // macaroons the named alternative) all ride this field opaquely — a substrate
+  // flip is a `Validate`-internal property, never a contract event.
+  // FINGERPRINT-ONLY downstream: the bytes here are validated in-line but never
+  // copied into any LOG-1 event (doc 16 §9; see log_events.proto).
+  bytes presented_credential = 1;
+
+  // The session this presentation belongs to — the join key across the identity
+  // plane. SessionRef is the SHARED canonical message owned by
+  // `dreamserpent.boundary.v1` (doc 14 §2 / §4: the orchestrator session record
+  // is the authority), imported — never redefined — per the Stage-0 freeze-PR
+  // session-ref unification.
+  dreamserpent.boundary.v1.SessionRef session_ref = 2;
+
+  // The registry service key (`services[]` row) the swap targets, e.g. the
+  // strawman `github` row (doc 16 §4, §11.1 step 4). Keys the grant lookup.
+  string service_id = 3;
+
+  // The D127 scopes the requested operation needs (doc 23 §6 token scope
+  // taxonomy). ADDITIVE + OPTIONAL (the additive-proto-promotion recipe: a new
+  // field on the ALREADY-frozen ValidateRequest, buf-safe because it is a fresh
+  // field number, never a re-use). The caller maps the requested operation to
+  // its required scope(s) off the §6 table (e.g. an egress connect asserts
+  // `v1:network:egress`; a workspace write asserts `v1:code:write`) and lists
+  // them here; the validator asserts the presented sub-token's `ds_scopes`
+  // COVER every entry, denying with `scope_insufficient` otherwise (doc 23 §6
+  // "the validator asserts that the requested operation is covered by the
+  // token's ds_scopes"). EMPTY preserves the pre-scope-enforcement behavior:
+  // no scope assertion is made (grant + liveness govern alone), so an existing
+  // caller that does not populate it sees the frozen semantics unchanged. This
+  // takes the next free field number 4 — the §9.3 reservations (16-19) are on
+  // the RESPONSE messages for token-lineage, not on this request.
+  repeated string desired_scopes = 4;
+}
+
+// ValidateVerdict is the ALLOW | DENY outcome of a `Validate` call (doc 16 §4).
+enum ValidateVerdict {
+  VALIDATE_VERDICT_UNSPECIFIED = 0;
+  // Signature + freshness + session liveness + grant lookup all passed; the
+  // swap proceeds with the returned grant_ref and expiry.
+  VALIDATE_VERDICT_ALLOW = 1;
+  // Validation failed (stale credential, killed/suspended session, out-of-grant
+  // service). Carries a machine-readable reason; surfaces as the D77 in-band
+  // structured 403 (doc 16 §11.1 step 3).
+  VALIDATE_VERDICT_DENY = 2;
+}
+
+// ValidateResponse is the D22 seam verdict (doc 16 §4 / §9).
+message ValidateResponse {
+  ValidateVerdict verdict = 1;
+
+  // The machine-readable denial reason, populated only when verdict == DENY
+  // (doc 16 §4: `DENY{machine_readable_reason}`). Carried in-band in the
+  // structured 403 body so the agent fails fast and routes around or awaits
+  // approval instead of looping (D77 reason-on-the-densest-channel).
+  string machine_readable_reason = 2;
+
+  // Opaque handle to the matched grant, populated only when verdict == ALLOW
+  // (doc 16 §4). Keys the swap executor's off-host credential fetch for this
+  // service (doc 16 §11.1 step 4); never the credential itself.
+  string grant_ref = 3;
+
+  // Grant validity horizon (doc 16 §4 `expiry`). Bounds how long the ALLOW may
+  // be relied on before re-validation; TTL is the minimal-CA revocation
+  // instrument alongside active liveness (doc 16 §5.4).
+  // Wall-clock UNIX time; the freeze PR may swap this to
+  // google.protobuf.Timestamp as an additive, wire-compatible refinement.
+  int64 expiry_unix_seconds = 4;
+
+  // P-T1 token-lineage reservation (doc 19 P-T1; ratified D104). RESERVED on
+  // ValidationResult-bearing surfaces so token lineage (chain/block
+  // fingerprints, parent_session hops, attenuation depth) binds later WITHOUT a
+  // proto change. The lineage is carried in the LOG-1 `ValidationResult` event
+  // (log_events.proto); this response keeps the matching window open so a future
+  // attenuation-aware verdict can echo it. RESERVE ONLY — no population behavior.
+  // See log_events.proto `ValidationResult` for the full reservation. Field
+  // numbers 16-19 are held for the token-lineage block here.
+  reserved 16, 17, 18, 19;
+}

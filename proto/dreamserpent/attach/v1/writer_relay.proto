@@ -1,0 +1,205 @@
+// WriterRelay — the D137 browser writer-seat WRITE leg (sessions/10 §2.1).
+//
+// Package home: dreamserpent.attach.v1 (the SAME frozen package as the read
+// schema — D137 maintainer amendment: the write path EXTENDS attach.v1 IN PLACE,
+// additively, NOT a new attach.v2 package; Options A/B of sessions/10 §2.1/§2.2
+// are SUPERSEDED). This file adds the one client→session input path D61 always
+// promised but left structurally absent: a single, server-arbitrated WRITER
+// seat the browser/canvas drives Claude Code through. It reopens the attach.v1
+// one-shot freeze under EXPLICIT pre-ship authorization (D24/D137) — the change
+// is WIRE-ADDITIVE (a new service + new messages on a flipped package; the
+// `buf breaking --against` the prior baseline passes), so the orchestrator.v1 /
+// hypervisor.v1 / canvas.v1 importers are UNAFFECTED and no v1 read message's
+// existing fields/numbers move.
+//
+// THE READ LEG IS UNCHANGED. Spectators and the driver both still WATCH via the
+// v1 SessionEvent stream (events.proto). The driver ADDITIONALLY holds an open
+// DriveSession stream. Accepting a DriveInput causes the orchestrator to (a)
+// write to Claude Code's stdin via the host-agent relay (the RELAY endpoint
+// transport, attach_handle.proto), and (b) emit the ALREADY-RESERVED v1
+// events.proto InputActivity{writer_seat_id, at, kind, seq} on the read stream
+// — so every spectator sees that the driver typed and the D78 attendedness
+// clock advances, WITH NO INPUT PAYLOAD ON THE READ LEG (the InputActivity
+// "carries no input payload by default" rule, events.proto §6.1 row 7). The
+// input *body* rides ONLY this write leg (DriveInput.payload), never the read
+// schema. This file therefore REUSES the v1 InputActivity as the read-leg
+// projection and DOES NOT redefine it.
+//
+// INVARIANTS (sessions/10 §3, D61/D78):
+//   - One-writer/N-reader (D61): exactly one writer_seat_id is live per session;
+//     it is a field on the SESSION RECORD (doc 15 §5.4). RequestWriterSeat is
+//     server-arbitrated at the single WatchSession terminator; a second
+//     concurrent writer is STRUCTURALLY impossible, not policy-forbidden —
+//     DriveSession rejects any DriveInput whose writer_seat_id ≠ the live grant.
+//   - Attributed record mutation (doc 15 §5.4 / D8 / D55): a grant/steal/yield
+//     carries the driver's D55 human identity and is observable by all N readers
+//     at granted_seq on the read stream. A steal cannot be silent.
+//   - No-inject re-green (D137): a ROLE_READER holds only an attach.v1
+//     AttachHandle{role=ROLE_READER} + a v1 WatchSession subscription — NO
+//     WriterRelay grant, NO DriveSession stream. The ONLY path to stdin is
+//     DriveSession behind a server-granted WriterSeatGrant behind D22/D55 auth.
+//
+// A message or field missed at this freeze-reopen is a v2-package event, not a
+// patch (proto/FREEZE.md change control). Every message + enum carries a
+// generous reserved tail so a later additive field stays additive (one-shot
+// freeze discipline). buf lint STANDARD: every RPC request/response is named
+// <Method>Request/<Method>Response, every enum has an _UNSPECIFIED zero value.
+
+syntax = "proto3";
+
+package dreamserpent.attach.v1;
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/attach/v1;attachv1";
+
+// =============================================================================
+// DriveBlockKind — the input block union a DriveInput carries, classified from
+// the LIVE Claude Code stream-json input frame's content blocks (keystone
+// 01KTXBG14J, sessions/10 §2.1 / §6.1 row 7): text | tool_result | image |
+// multi_block. This MIRRORS the v1 events.proto InputActivityKind taxonomy by
+// intent (the read-leg projection of an accepted input emits that v1 kind), but
+// is its OWN enum on the write leg so the two legs evolve independently. The
+// proto3/buf STANDARD zero value is DRIVE_BLOCK_KIND_UNSPECIFIED; new kinds are
+// additive (reserved tail keeps headroom).
+// =============================================================================
+enum DriveBlockKind {
+  DRIVE_BLOCK_KIND_UNSPECIFIED = 0;
+  DRIVE_BLOCK_KIND_TEXT = 1;         // a plain text input block
+  DRIVE_BLOCK_KIND_TOOL_RESULT = 2;  // a tool_result block (a human answering a tool)
+  DRIVE_BLOCK_KIND_IMAGE = 3;        // an image input block (source carried in payload)
+  DRIVE_BLOCK_KIND_MULTI_BLOCK = 4;  // a composite of >1 block in one frame
+  reserved 8 to 15;                  // additive input-kind headroom (no v2)
+}
+
+// =============================================================================
+// WriterSeatGrant — the result of a successful RequestWriterSeat: the live seat
+// the driver now holds. `writer_seat_id` is the seat token threaded into the v1
+// events.proto InputActivity.writer_seat_id and required on every DriveInput.
+// The seat is SHORT-LIVED (`expires_at`, renewed by re-request — NEVER a
+// long-lived cred, D39) and ATTRIBUTED (`driver_identity`, mirrored into the
+// session record, D8/D55). `granted_seq` is the WatchSession seq at which the
+// seat changed hands, so every N-reader can OBSERVE the handoff on the read
+// stream (a steal cannot be silent).
+// =============================================================================
+message WriterSeatGrant {
+  string writer_seat_id = 1;   // seat token; == v1 InputActivity.writer_seat_id; required on DriveInput
+  string driver_identity = 2;  // attributed driver (D8/D55) — mirrored into the session record
+  uint64 expires_at = 3;       // unix seconds; short-lived, renew by re-request (D39)
+  uint64 granted_seq = 4;      // the WatchSession seq the seat changed hands at (spectators observe it)
+  reserved 5 to 15;            // additive grant-metadata headroom (no v2)
+}
+
+// =============================================================================
+// RequestWriterSeat — take the one writer seat (the D61 handoff, a session-record
+// mutation, doc 15 §5.4). Server-arbitrated at the single WatchSession
+// terminator: the orchestrator grants the free seat, or arbitrates a
+// handoff/steal under policy, then mutates the record and emits the change on
+// the read stream. Concurrent requests resolve to EXACTLY ONE grant; the loser
+// is REFUSED (not silently dropped) — surfaced as an RPC error, never a second
+// live seat.
+// =============================================================================
+message RequestWriterSeatRequest {
+  string session_uuid = 1;       // the session whose seat is requested
+  bytes attach_auth = 2;         // the v1 AttachHandle.AuthMaterial.token (D39 short-lived, session-scoped)
+  string identity_assertion = 3; // D22/D55 human-identity proof — WHO is asking for the seat
+  bool force_steal = 4;          // request a takeover from an idle/yielding driver — POLICY-GATED (default: refuse an attended seat without approval, D138)
+  reserved 5 to 15;              // additive request headroom (no v2)
+}
+
+// RequestWriterSeatResponse wraps the granted seat. STANDARD lint requires the
+// per-RPC <Method>Response shape; the substance is the WriterSeatGrant (so the
+// grant message stays reusable on the read-stream projection and in fakes). A
+// refusal is an RPC error status, not a populated-with-empty-grant response.
+message RequestWriterSeatResponse {
+  WriterSeatGrant grant = 1;
+  reserved 2 to 15;              // additive response headroom (no v2)
+}
+
+// =============================================================================
+// YieldWriterSeat — release the seat held by `writer_seat_id` (the cooperative
+// half of the handoff). A yield is an attributed record mutation observable by
+// all N readers at the next granted_seq, just like a grant. Idempotent: yielding
+// a seat that is not live is acknowledged, not an error.
+// =============================================================================
+message YieldWriterSeatRequest {
+  string session_uuid = 1;    // the session whose seat is being yielded
+  string writer_seat_id = 2;  // the seat to release; MUST be the caller's live grant
+  reserved 3 to 15;           // additive request headroom (no v2)
+}
+
+// YieldWriterSeatResponse acknowledges the release. `released_seq` is the
+// WatchSession seq at which the seat went free (observable by spectators), so a
+// yield is as visible as a grant.
+message YieldWriterSeatResponse {
+  uint64 released_seq = 1;    // the WatchSession seq the seat went free at
+  reserved 2 to 15;           // additive response headroom (no v2)
+}
+
+// =============================================================================
+// DriveSession — the drive channel: a BIDI stream the CURRENT seat-holder opens
+// to type into Claude Code (sessions/10 §2.1). The client streams drive input
+// (DriveSessionRequest); the server streams acks (DriveSessionResponse). ONLY a
+// live seat-holder may drive: DriveSession rejects any DriveInput whose
+// writer_seat_id ≠ the live grant — a stale/forged/absent id reaches NO stdin
+// and emits NO InputActivity (sessions/10 §5 claim 2). The input BODY is carried
+// HERE (DriveInput.payload), NEVER on the v1 read leg; each ACCEPTED input emits
+// a v1 events.proto InputActivity on the read stream so spectators see that the
+// driver typed and the D78 attendedness clock advances (D138 — closes D78's
+// writer-attached-only interim).
+// =============================================================================
+
+// DriveInput is one input frame the seat-holder sends. `writer_seat_id` MUST
+// equal the live grant; a stale/forged id is rejected server-side. `kind` is
+// the DriveBlockKind union; `payload` is the input body (text / tool_result /
+// image source) — carried HERE, never on the read leg. `client_seq` is a
+// client-side monotonic for at-most-once / replay rejection.
+message DriveInput {
+  string writer_seat_id = 1;  // MUST equal the live grant; a stale/forged id is rejected server-side
+  DriveBlockKind kind = 2;    // the input block union (text | tool_result | image | multi_block)
+  bytes payload = 3;          // the input body — carried ONLY on the write leg, never on the read leg
+  uint64 client_seq = 4;      // client-side monotonic for at-most-once / replay rejection
+  reserved 5 to 15;           // additive drive-input headroom (no v2)
+}
+
+// DriveSessionRequest is the client→server stream element: exactly one
+// DriveInput per element. Wrapped (rather than streaming DriveInput directly) so
+// later additive stream-control fields stay additive under one-shot freeze.
+message DriveSessionRequest {
+  DriveInput input = 1;
+  reserved 2 to 15;           // additive stream-control headroom (no v2)
+}
+
+// DriveSessionResponse is the server→client stream element: the ack for an
+// accepted input. `accepted_client_seq` echoes the DriveInput.client_seq the
+// server admitted (at-most-once confirmation); `emitted_input_activity_seq` is
+// the WatchSession seq of the v1 InputActivity this input emitted on the read
+// stream (so the driver can correlate its write with the public read-leg
+// projection spectators see).
+message DriveSessionResponse {
+  uint64 accepted_client_seq = 1;        // the DriveInput.client_seq the server admitted
+  uint64 emitted_input_activity_seq = 2; // the read-stream seq of the emitted v1 InputActivity
+  reserved 3 to 15;                      // additive ack headroom (no v2)
+}
+
+// =============================================================================
+// WriterRelayService — the server-arbitrated write-leg service (the seam named
+// "WriterRelay" in D137/sessions/10 §2.1; the `Service` suffix is the proto
+// house-style rendering buf STANDARD's SERVICE_SUFFIX requires, seam identity
+// unchanged — the hypervisor.v1 `HypervisorDriver`→`HypervisorDriverService` /
+// identity.v1 `IdentityValidation`→`Service` precedent). Lives at the
+// WatchSession terminator's owner (doc 15 §5.3): arbitration (RequestWriterSeat
+// / YieldWriterSeat) and the drive verb (DriveSession) share ONE owner, so
+// single-driver arbitration is one service's invariant, never split across two.
+// =============================================================================
+service WriterRelayService {
+  // Take the one writer seat — the D61 handoff, a session-record mutation
+  // (doc 15 §5.4). Server-arbitrated; exactly one live seat; a loser is refused.
+  rpc RequestWriterSeat(RequestWriterSeatRequest) returns (RequestWriterSeatResponse);
+
+  // Release the held seat — the cooperative half of the handoff; observable.
+  rpc YieldWriterSeat(YieldWriterSeatRequest) returns (YieldWriterSeatResponse);
+
+  // The drive channel — ONLY the live seat-holder may open it. Bidi: the client
+  // streams DriveInput, the server streams acks (sessions/10 §2.1). Each
+  // accepted input emits a v1 events.proto InputActivity on the read stream.
+  rpc DriveSession(stream DriveSessionRequest) returns (stream DriveSessionResponse);
+}

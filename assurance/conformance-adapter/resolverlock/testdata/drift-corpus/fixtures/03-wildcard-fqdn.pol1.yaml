@@ -1,0 +1,16 @@
+# drift class: a blocklist entry domain is a wildcard FQDN.
+# named edge shape: wildcard FQDN (D74 exact-FQDNs-only).
+# expected verdict (go, rust) = (reject, accept)
+# Go: ErrBadFQDN — the resolver lock is exact-FQDNs-only (D74); a `*.` wildcard
+#     is never a resolver-lock entry.
+# Rust: parse_layer does not validate FQDN shape on blocklist entries (it stores
+#     the domain verbatim); the exact-FQDN invariant is enforced by the Go
+#     offline half and by the Rust suite's shape assertions, not the parser.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+blocklist:
+  - domain: "*.example"
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

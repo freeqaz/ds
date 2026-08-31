@@ -1,0 +1,159 @@
+// EntrypointService — the host-agent-side terminator the GUEST dials to report
+// boot-to-entrypoint readiness and runtime exit (D38, D81; doc 15 §4.1 step 8/§8
+// "boot-to-entrypoint" named segment).
+//
+// Package home: dreamserpent.runtime.v1 (FREEZE.md `dreamserpent.runtime.v1` row).
+// This is the GUEST → host-agent reporting half of the D38 entrypoint contract:
+// entrypoint_config.proto carries the boot config DOWN (host agent → guest), this
+// service carries readiness/exit back UP (guest → host agent). The host agent is
+// the SERVER and the guest runtime wrapper is the CLIENT — the host agent
+// terminates the call, exactly as it terminates the D38 event socket (doc 15
+// §5.4). It is the boundary of the "boot-to-entrypoint" segment the D81 create→
+// attach decomposition names, so per-segment timing (D81, instrument-first) is
+// measurable at this seam from M0.
+//
+// SEPARATE PACKAGE, NOT attach.v1 (OQ-B): the attach event STREAM (the projected
+// runtime lifecycle, dreamserpent.attach.v1.SessionEvent) is a different seam with
+// a different owner (Attach & client) and a different cardinality (one writer / N
+// readers over WatchSession). This service is the host-LOCAL boot handshake — a
+// guest dialing its own host agent over the guest-local transport — not the
+// fan-out event stream. Folding it into attach.v1 (the design Part-4-res.-8 fold
+// option) is DECLINED.
+//
+// RUNTIME IGNORANCE / NO ADAPTER COOPERATION (D20/D38; doc 16 §12): these RPCs are
+// generic readiness/exit signals; nothing here depends on a specific runtime, and
+// no GUARDRAIL depends on the guest calling them. A guest that never reports ready
+// is handled by the host agent's own boot timeout (the orchestrator's §3 state
+// machine + D46 clock are the authority), NOT by trusting the runtime. The reports
+// are an OBSERVABILITY/coordination input, never an enforcement point.
+//
+// THE one-shot freeze (proto/FREEZE.md; doc 14 §2 change control): a missed RPC or
+// field at this M0 flip is a v2-package event, not a patch. The freeze covers the
+// message SHAPE only — delivery encoding stays FREE (OQ-C). Each RPC takes a
+// `<Verb>Request` and returns a `<Verb>Response` per buf STANDARD
+// (RPC_REQUEST_RESPONSE_UNIQUE), so a reply grows optional fields post-freeze
+// without a v2 (the orchestrator.v1 / hostagent.v1 wrapper precedent).
+
+syntax = "proto3";
+
+package dreamserpent.runtime.v1;
+
+// SessionRef is the SHARED join quartet (boundary.v1, D66/D44) — imported, never
+// re-declared (doc 14 §2/§4). Every report names the session by the one
+// authoritative join key so the host agent joins it to the session record.
+import "dreamserpent/boundary/v1/session_ref.proto";
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/runtime/v1;runtimev1";
+
+// EntrypointService is the host-agent-side terminator of the D38 boot-to-entrypoint
+// handshake (doc 15 §4.1 step 8/§8). The GUEST runtime wrapper is the client; the
+// HOST AGENT is the server. Two reports bound the runtime's lifecycle at the boot
+// seam: ReportReady (the entrypoint is up and serving) and ReportExit (the runtime
+// process terminated). Both are coordination/observability signals, never
+// guardrails (D20/D38, doc 16 §12).
+service EntrypointService {
+  // ReportReady is the guest's "entrypoint is up" signal — the close of the
+  // boot-to-entrypoint segment (D81; doc 15 §4.1 step 8). The host agent stamps the
+  // readiness, feeds the D81 per-segment create→attach timing (instrument-first),
+  // and lets the §4.1 routable/attach gates proceed. A guest that never reports
+  // ready is bounded by the host agent's own boot timeout (the §3 state machine is
+  // the authority) — readiness here is an INPUT, never a trusted gate.
+  rpc ReportReady(ReportReadyRequest) returns (ReportReadyResponse);
+
+  // ReportExit is the guest's "runtime process terminated" signal. The host agent
+  // records the exit for the lifecycle/telemetry feed (the orchestrator's §3 state
+  // machine + reconciler are the lifecycle authority — an exit reported here is an
+  // observability input, and a guest that crashes WITHOUT reporting is caught by the
+  // host agent's own supervision, never by trusting this call).
+  rpc ReportExit(ReportExitRequest) returns (ReportExitResponse);
+}
+
+// ReportReadyRequest is the guest's boot-to-entrypoint readiness report (D38/D81).
+message ReportReadyRequest {
+  // The session reporting ready — the SHARED join quartet (boundary.v1.SessionRef),
+  // imported never re-declared. The host agent joins this to the session record /
+  // the EntrypointConfig it handed down.
+  dreamserpent.boundary.v1.SessionRef session_ref = 1;
+
+  // The guest-stamped readiness time, unix seconds. Advisory: the host agent stamps
+  // its OWN receipt time for the authoritative D81 per-segment timing (the guest
+  // clock may be pre-resync, doc 15 §4.3); this is the runtime's self-reported view.
+  uint64 ready_at = 2;
+
+  // Reserved for forward readiness-report growth (e.g. a runtime version/build
+  // string, a structured capability/probe-result sub-message, a resolved-overlay
+  // attestation digest once the role-overlay path wants one). A field missed at this
+  // one-shot freeze is a v2 — generous range. Additive fields only; NEVER credential
+  // material (D39).
+  reserved 3 to 20;
+}
+
+// ReportReadyResponse acks the readiness report. Reserved as a distinct message
+// (not google.protobuf.Empty) so the ack path can grow optional fields post-freeze
+// without a v2 (the hostagent.v1 ReportHeartbeatResponse precedent).
+message ReportReadyResponse {
+  // Reserved for forward ack-path growth (e.g. a host-agent-stamped received_at, a
+  // proceed/abort directive, a clock-skew correction hint). Additive fields only.
+  reserved 1 to 15;
+}
+
+// ExitReason classifies a runtime exit (doc 15 §3 lifecycle / §4.2 teardown). It is
+// an OBSERVABILITY taxonomy, never an enforcement input — the orchestrator's §3
+// state machine + reconciler own the lifecycle verdict regardless of what the guest
+// reports (or fails to report).
+enum ExitReason {
+  // The proto3 zero value (buf-STANDARD _UNSPECIFIED zero). UNSPECIFIED means the
+  // field was never set, never a wire default for "normal".
+  EXIT_REASON_UNSPECIFIED = 0;
+  // The runtime completed its work and exited cleanly (the agent finished the task).
+  EXIT_REASON_COMPLETED = 1;
+  // The runtime exited on its own error (a crash / nonzero exit from inside the
+  // runtime). `exit_code`/`detail` carry the specifics.
+  EXIT_REASON_ERROR = 2;
+  // The runtime was terminated by an external signal (host-agent supervision, a
+  // session destroy, an OOM kill). The orchestrator-driven path, surfaced here for
+  // the telemetry record.
+  EXIT_REASON_TERMINATED = 3;
+
+  // Reserved for forward exit-taxonomy growth (e.g. a budget-exceeded class once the
+  // Budget self-limit surfaces an exit, a park/suspend-driven exit class for D46).
+  // A new reason is an additive enum value, never a v2.
+  reserved 4 to 15;
+}
+
+// ReportExitRequest is the guest's runtime-exit report (D38; doc 15 §3/§4.2).
+message ReportExitRequest {
+  // The session whose runtime exited — the SHARED join quartet (boundary.v1.SessionRef),
+  // imported never re-declared.
+  dreamserpent.boundary.v1.SessionRef session_ref = 1;
+
+  // The exit classification (ExitReason). Observability only — never the lifecycle
+  // verdict (the §3 state machine is the authority).
+  ExitReason reason = 2;
+
+  // The process exit code, when one exists (meaningful for COMPLETED/ERROR; 0 / unset
+  // for a signal-driven TERMINATED). Diagnostic.
+  int32 exit_code = 3;
+
+  // The guest-stamped exit time, unix seconds. Advisory (the guest clock may be
+  // pre-resync, doc 15 §4.3); the host agent stamps its own receipt for the record.
+  uint64 exited_at = 4;
+
+  // A free-text diagnostic detail (e.g. a panic message, a signal name). Rig-tuned /
+  // never frozen in content; NEVER credential material (D39).
+  string detail = 5;
+
+  // Reserved for forward exit-report growth (e.g. a structured error sub-message, a
+  // restart-recommendation hint, a resource-at-exit sample). A field missed at this
+  // one-shot freeze is a v2 — generous range. Additive fields only.
+  reserved 6 to 20;
+}
+
+// ReportExitResponse acks the exit report. Reserved as a distinct message (not
+// google.protobuf.Empty) so the ack path can grow optional fields post-freeze
+// without a v2.
+message ReportExitResponse {
+  // Reserved for forward ack-path growth (e.g. a host-agent-stamped received_at, a
+  // teardown-acknowledged marker). Additive fields only.
+  reserved 1 to 15;
+}

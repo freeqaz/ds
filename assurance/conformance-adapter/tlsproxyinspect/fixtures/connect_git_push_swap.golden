@@ -1,0 +1,59 @@
+{
+  "kind": "connect-git-push-swap",
+  "why": "doc 06 §2.2 + §3(c) (git push via CONNECT with credential swap): a `git push` over the EXPLICIT path sends git-receive-pack carrying ONLY the short-lived VM credential; the credential-swap executor REWRITES the Authorization header to the long-lived upstream credential, so the upstream receives the long-lived cred and the VM NEVER sees it. This golden pins the CONNECT preamble + the ls-remote (GET info/refs) + receive-pack (POST) SHAPE (headers byte-identical, pack by digest) AND the swap rung (the grant reference + the long-lived FINGERPRINT, never a credential value); a guard asserts no raw credential byte is on disk.",
+  "sni": "github.com",
+  "connect": {
+    "authority": "github.com:443",
+    "request_line": "CONNECT github.com:443 HTTP/1.1",
+    "response_status": 200,
+    "response_reason": "Connection established"
+  },
+  "ls_remote": {
+    "request": {
+      "method": "GET",
+      "path": "/org/repo.git/info/refs?service=git-receive-pack",
+      "headers": [
+        "git-protocol: version=2",
+        "host: github.com",
+        "user-agent: git/2.x"
+      ],
+      "body_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_len": 0
+    },
+    "response": {
+      "headers": [
+        "content-type: application/x-git-receive-pack-advertisement"
+      ],
+      "status": 200,
+      "body_digest": "sha256:04fd238e575327bfd26bb0aa7cf831efcc37e706a084c6f025f194aebdf91ec4",
+      "body_len": 126
+    }
+  },
+  "receive_pack": {
+    "request": {
+      "method": "POST",
+      "path": "/org/repo.git/git-receive-pack",
+      "headers": [
+        "authorization: bearer \u003cswapped:fp-long-github\u003e",
+        "content-type: application/x-git-receive-pack-request",
+        "host: github.com"
+      ],
+      "body_digest": "sha256:f77df96628023e356286528d54db45ac6d7c4c8a380246a8fb5627d10b712eaa",
+      "body_len": 18944
+    },
+    "response": {
+      "headers": [
+        "content-type: application/x-git-receive-pack-result"
+      ],
+      "status": 200,
+      "body_digest": "sha256:1fe83961cd907ac8feab1823569d66fe3e9d3110e09d6ff1ccf09ccac7bd3957",
+      "body_len": 18
+    }
+  },
+  "swap": {
+    "service": "github",
+    "rung": "grant:github:fp-long-github",
+    "upstream_fingerprint": "fp-long-github",
+    "vm_sees_long_lived": false
+  }
+}

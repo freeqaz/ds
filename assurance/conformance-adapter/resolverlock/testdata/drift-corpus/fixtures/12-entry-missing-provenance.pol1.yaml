@@ -1,0 +1,21 @@
+# drift class: a baseline-pack entry omits mandatory provenance.
+# named edge shape: entry sans provenance (D74 mandatory provenance).
+# expected verdict (go, rust) = (accept, reject)
+# Rust: MissingProvenance — every baseline-pack entry must carry
+#     `provenance_source_url` + `evidence` (§8.1 (e) / D74); this entry omits both.
+# Go: the resolver-lock scanner reads only the blocklist; baseline_pack entries
+#     are invisible to it, so the blocklist extracts cleanly. The Rust schema
+#     parser is the provenance tripwire (complementary coverage).
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+baseline_pack:
+  entries:
+    - fqdn: api.example
+      family: core
+      ports: [443]
+blocklist:
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

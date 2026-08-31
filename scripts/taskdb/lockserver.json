@@ -1,0 +1,20 @@
+{
+  "_comment": "EXAMPLE shared lock-server config for taskdb. Shipped DISABLED: out of the box taskdb locks locally (per-clone SQLite) and never dials Postgres. To coordinate locks across machines, stand up your own Postgres lock registry (see scripts/taskdb/lockserver-provision.sql), reach it over an SSH tunnel, and either edit this file in place or export TASKDB_LOCK_DSN — the env override wins and enables remote locking on its own, so no credential ever has to be committed. This file configures ONLY task locking; tasks/*.json in git remain the authority for all task content and the DAG. TASKDB_LOCK_DISABLE=1 forces local-only regardless of this file.",
+  "enabled": false,
+  "ssh": {
+    "host": "lock-server.example.com",
+    "user": "tunnel",
+    "remote_pg_host": "127.0.0.1",
+    "remote_pg_port": 5432,
+    "local_port": 5433
+  },
+  "postgres": {
+    "host": "127.0.0.1",
+    "port": 5433,
+    "dbname": "taskdb",
+    "user": "devteam",
+    "password": "",
+    "sslmode": "disable",
+    "connect_timeout": 3
+  }
+}

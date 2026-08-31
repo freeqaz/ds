@@ -1,0 +1,51 @@
+-- SPDX-License-Identifier: Apache-2.0
+-- 0014_sessions_keyset_idx.sql — the COMPOSITE COVERING INDEX for the §5.3 console
+-- read pushed down as a keyset scan (postgres_sql.go sqlListSessions; doc 15 §8
+-- "one bounded store query per page"). Control-plane state in external Postgres
+-- only (D6). Additive-only.
+--
+-- WHY THIS INDEX. sqlListSessions serves the console read as a KEYSET SCAN: it
+-- scopes by the session's launching principal (the §3.1 attribution narrowing, an
+-- EXISTS over principals on sessions.launching_principal) and pages in the
+-- newest-first total order (created_at DESC, session_uuid DESC), bounded to one
+-- page per query. Before this migration there was NO index that serves that
+-- scoped+ordered access: 0001_sessions.sql creates NO created_at index on
+-- sessions, and 0006_principals.sql adds only the SINGLE-column
+-- sessions_launching_principal_idx (launching_principal) — which can find a
+-- principal's rows but carries no ordering key, so the scoped+paged query still
+-- has to SORT, and the fleet-wide page still SEQ-SCANs + SORTs. At fleet scale
+-- (many thousands of sessions, one bounded page per console request) that
+-- per-page seq-scan+sort is a tail-latency regression exactly where doc 15 §8
+-- promises "one bounded store query per page". This composite index makes the
+-- scoped page a bounded index range-scan (leading equality on
+-- launching_principal, then the created_at DESC / session_uuid DESC ordering
+-- carried in index order) with no post-scan sort.
+--
+-- COLUMN ORDER MATCHES THE ORDER BY EXACTLY. (launching_principal, created_at
+-- DESC, session_uuid DESC): the leading key is the scoping column the EXISTS
+-- filter probes; the trailing two are the keyset order keys, stored DESC so the
+-- newest-first walk (and the keyset cursor `created_at < $cursor OR (created_at =
+-- $cursor AND session_uuid < $cursor)`) is served in index order without a sort.
+-- The DESC/DESC ordering is symmetric under reversal, so a plain composite would
+-- also serve the forward scan, but declaring the exact ORDER BY direction keeps
+-- the index self-documenting and lets the planner serve BOTH the scoped page and
+-- the fleet-wide page (which drops the leading equality) from the same index.
+--
+-- ADDITIVE-ONLY. This adds ONE index and touches no table, column, constraint, or
+-- row — a pure read-path optimization. It does not reopen any frozen migration:
+-- 0001_sessions.sql and 0006_principals.sql are LEFT UNTOUCHED (migrations are
+-- never renumbered or reordered after landing — README "Ordering"); the covering
+-- index rides this NEW next-free file. A fresh database applies 0001..0014 in
+-- lexical order and ends with the index present; an already-migrated database
+-- gains it when the runner applies this one new file. It mints no D-number.
+--
+-- Apply-contract posture (orchestrator/migrations/README.md): raw DDL with NO
+-- `IF NOT EXISTS` and no embedded apply mechanism — re-applying an already-applied
+-- file errors on the duplicate object by design; re-runnability is the runner's
+-- job via its `schema_migrations` ledger, not the schema's. The supported path is
+-- the whole set applied in lexical order to a fresh database. `0014` is the next
+-- free zero-padded prefix after `0013_policy_log_deny_memo_kind.sql`, so lexical
+-- order equals numeric order and the set stays dense from `0001`.
+
+CREATE INDEX sessions_keyset_idx
+    ON sessions (launching_principal, created_at DESC, session_uuid DESC);

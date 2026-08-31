@@ -1,0 +1,74 @@
+# ds-entrypoint.service — the boot wiring that launches the VM entrypoint
+# binary (D38) inside the M0 guest, baked into the image at
+# /etc/systemd/system/ds-entrypoint.service and enabled by build-m0-image.sh.
+#
+# This is the "the entrypoint launches the pinned Claude Code runtime" half of
+# the task's done-when: at boot the guest starts the D38 entrypoint
+# (M0_ENTRYPOINT_PATH), which reads its opaque entrypoint_config_ref (handed in
+# at session create through SessionMaterial/VmSpec, doc 15 §5.1 — NOT baked into
+# the image, D20 runtime ignorance), then launches and supervises the runtime
+# process and opens the VM-local event socket that terminates at the host agent
+# (doc 15 §5.4). The runtime it launches is the D49-pinned Claude Code
+# (M0_CC_VERSION) installed at bake time.
+#
+# The entrypoint binary itself is a SEPARATE task — proto/dreamserpent/runtime/v1
+# is README-reserved/unfrozen, so vm/entrypoint/ ships only its README today.
+# This unit therefore launches whatever artifact that task stages at
+# M0_ENTRYPOINT_PATH; until that binary exists the unit fails closed at boot
+# (the path is absent), which boot-validate.sh treats as the EXPECTED M0-skeleton
+# state and reports as such rather than a build failure (see README §Boot
+# validation). build-m0-image.sh substitutes the concrete path for the
+# __ENTRYPOINT_PATH__ / __ENTRYPOINT_CONFIG_DIR__ tokens at bake time.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[Unit]
+Description=Dream Serpent VM entrypoint (D38 runtime seam)
+Documentation=https://github.com/dream-serpent/dream-serpent/blob/main/vm/entrypoint/README.md
+# Do NOT gate on network-online.target. The M0 attach control channel rides
+# AF_VSOCK (m1-live-session-transport), not the guest IP network: the entrypoint
+# dials its event socket over a guest-LOCAL UDS that ds-attachfwd bridges to the
+# host over vsock — no routed NIC is on the attach path. The guest's usermode
+# SLIRP NIC never reaches network-online.target, so a Wants/After on it HANGS the
+# unit (live-found: ds-entrypoint never started → the writer-seat drive never
+# reached the runtime). ds-attachfwd.service already dropped this gate for the
+# same reason; this unit matches it. Egress routability is enforced separately by
+# the nft4 floor on the tap, not by ordering here.
+# Fail closed if the entrypoint binary was never staged (M0 skeleton state).
+ConditionFileIsExecutable=__ENTRYPOINT_PATH__
+# Per-session WORKSPACE disk (dogfood, 01KWHCG6EV): when a workspace disk is
+# attached, its mount must land before the runtime execs with WorkingDir there.
+# ORDERING ONLY — deliberately no Requires/Wants. Ordering against a unit that is
+# not in the boot transaction is a no-op, so a session with NO workspace disk is
+# byte-for-byte the historical boot; a session WITH one is correctly sequenced.
+# Pairing this with a requirement would make an unmountable workspace kill an
+# otherwise-viable session, which is the wrong trade for a fail-open carrier (the
+# config-drive above is the fail-CLOSED one — see work.mount's header).
+After=work.mount
+
+[Service]
+Type=notify
+# The opaque config ref drop location (D38); the host agent injects the
+# session's entrypoint_config_ref here at create. Reserved, never baked.
+Environment=DS_ENTRYPOINT_CONFIG_DIR=__ENTRYPOINT_CONFIG_DIR__
+# PATH for the runtime and everything it spawns, INCLUDING the baked dev toolchains.
+# This has to be set HERE, on the unit. /etc/environment does not reach a systemd
+# system service (it is read by PAM for login sessions), and /etc/profile.d only
+# reaches login shells — but the agent's shell tool spawns a NON-login, NON-interactive
+# shell whose environment is inherited from this service. Live-found 2026-07-29: with
+# the toolchains on disk and PATH set in both of those places, an in-VM `go version`
+# still returned "go: command not found". vm/entrypoint composes the runtime's
+# environment as os.Environ() layered with the host's LaunchSpec env, so what this
+# unit exports is what the agent's tools actually see.
+Environment=PATH=__TOOLCHAIN_PATH__
+ExecStart=__ENTRYPOINT_PATH__
+# The entrypoint is the session's reason to exist: if it dies, the session is
+# over. No restart loop — the host agent drives the lifecycle (doc 15 §4.2).
+Restart=no
+# Run as an unprivileged guest user, not root; the entrypoint drops further as
+# needed. (User is created by build-m0-image.sh.)
+User=ds
+Group=ds
+
+[Install]
+WantedBy=multi-user.target

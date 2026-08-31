@@ -1,0 +1,411 @@
+// The interception-CA mint seam (D17/D82) and the IdentityMint service surface
+// (doc 16 §4 / §9).
+//
+// D82 ratifies that Identity's D22 mint service mints the per-session
+// interception CA (D17), under TWO SEPARATE ROOT HIERARCHIES — workload-identity
+// (hierarchy 1) and interception (hierarchy 2) — so compromise of one never
+// yields the other's signing capability (D82; doc 16 §4). Both roots live
+// off-host in the D39 secret-store trust zone; an interception-root signature
+// can never validate as a workload identity, so the egress-gateway
+// TLS-termination capability and the attribution capability fail independently.
+//
+// PLACEMENT (D22/D35/D82, reconciled — doc 16 §9): the `IdentityMint` service
+// and its messages live in `dreamserpent.identity.v1`; `dreamserpent.orchestrator.v1`
+// carries NO Mint RPC. D35's MintIdentity-as-separate-service is satisfied by
+// this separate package + dedicated instance (doc 02 §7 / D39), with the
+// orchestrator merely FRONTING the mint — an orchestrator/KVM compromise yields
+// no signing keys.
+//
+// Stage-0 freeze seam: of `IdentityMint`, only `MintInterceptionCA` rode the
+// Stage-0 flip. `MintGrants`, `MintWorkloadIdentity`, `RevokeSession`, and now
+// `MintSessionToken` are all PROMOTED as additive-in-M0-window RPCs (ratified
+// D111 — doc 16 §9; `MintSessionToken` is the doc 19 token work, D99/D97). No
+// mint RPC remains reserved. Each promotion is buf-safe: a new service RPC + new
+// messages on an already-frozen package, NOT a new freeze and NOT a break.
+syntax = "proto3";
+
+package dreamserpent.identity.v1;
+
+// The canonical SessionRef (D66/D44) — owned by dreamserpent.boundary.v1,
+// imported at the Stage-0 freeze-PR session-ref unification, never redefined
+// in this package (doc 14 §2/§4; doc 16 §9 — both packages freeze together).
+import "dreamserpent/boundary/v1/session_ref.proto";
+
+// The grant-record contract — same package, sibling file (the §5.1 GrantSet /
+// MintGrantsRequest the promoted MintGrants RPC below references). Same-package
+// cross-file types still require an explicit import (cf. log_events.proto
+// importing validate.proto); the D111 additive grant-record promotion (doc 16
+// §5.1 / §9).
+import "dreamserpent/identity/v1/grants.proto";
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/identity/v1;identityv1";
+
+// IdentityMintService is the mint surface (doc 16 §4 `service IdentityMint`).
+// The `IdentityMint` name in doc 16's prose sketch is rendered with the proto
+// house-style `Service` suffix (buf STANDARD); the seam identity is unchanged.
+//
+// At Stage 0 this service exposed exactly one RPC — `MintInterceptionCA`. The
+// M0-window additive promotions (D111) have since landed `MintGrants`,
+// `MintWorkloadIdentity`, `RevokeSession`, and `MintSessionToken` as real RPCs;
+// no mint RPC remains reserved. Each addition is an additive, buf-safe event,
+// never a v2-package break (doc 16 §9, D111).
+service IdentityMintService {
+  // MintInterceptionCA mints the per-session interception CA under the
+  // interception root (hierarchy 2, D82), distinct from the workload-identity
+  // root (hierarchy 1).
+  //
+  // LIFECYCLE: minted at session create, dies at teardown. Per-session CA
+  // material is session-lifecycle data — the D72-EXEMPT class, same as the D22
+  // grants (doc 16 §4): session-scoped, not policy_log-sequenced. Session A's CA
+  // is useless against session B (doc 16 §4 / §13 assurance row).
+  //
+  // KEY CUSTODY (D39): both roots live off-host in the secret-store trust zone.
+  // The per-session interception-CA key is delivered proxy-bound to ds-tlsproxy
+  // for on-the-fly per-origin leaf minting and is destroyed at teardown — the
+  // bounded D76 exposure: a compromised proxy holds one live session's
+  // interception material, never a root, never workload-identity signing.
+  //
+  // TRUST-STORE INJECTION: the orchestrator-driven provisioning hook inserts the
+  // returned CA into the per-session CoW overlay between CloneFromImage and
+  // entrypoint, fail-closed — a session never starts with a missing/empty trust
+  // anchor (D82; doc 16 §4). The master session-create choreography is the
+  // orchestrator doc's; this seam owns only the mint.
+  rpc MintInterceptionCA(MintInterceptionCARequest) returns (MintInterceptionCAResponse);
+
+  // MintGrants issues the deterministic grant set (doc 16 §5.1, §9; ratified
+  // D111 — the additive grant-record promotion in the M0 window). It intersects
+  // the session's env spec (D7) with the org `services[]` registry and returns a
+  // `GrantSet` of typed grant records (identity × service × scope × TTL) plus the
+  // per-service placeholder tokens the agent holds. The decision is a
+  // DETERMINISTIC LOOKUP, never a policy evaluation — no Cedar, no expression
+  // language in v0 (D52). The request/response messages live in grants.proto in
+  // this package. This is the additive promotion of the former reserved
+  // `rpc MintGrants(...) returns (...)  // GrantSet: typed records` comment, made
+  // a real buf-safe service/RPC addition to the already-frozen package — NOT a
+  // new freeze, NOT a break (FREEZE.md identity.v1 row). The grant-FETCH protocol
+  // and D55 Vault integration that consume the returned `grant_ref` are a
+  // SEPARATE later rider (doc 16 §9 grant-fetch / D84 rows; M1 window).
+  //
+  // The response is the doc 16 §5.1 `GrantSet` (NOT MintGrantsResponse): the
+  // name is load-bearing — it is the §9 / reserved-comment vocabulary ("GrantSet:
+  // typed records") and the tested Go type `mint.GrantSet` this promotion mirrors
+  // (grants.proto), so a later Go repoint stays mechanical. buf STANDARD's
+  // RPC_RESPONSE_STANDARD_NAME is ignored on this one line for that reason — the
+  // same allowance the FROZEN auth.v1 package takes for `AuthTokenResponse`.
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  rpc MintGrants(MintGrantsRequest) returns (GrantSet);
+
+  // MintWorkloadIdentity mints hierarchy-1 workload identity (doc 16 §3.1;
+  // ratified D111 — the additive M0-window promotion). The response is an X.509
+  // leaf with a SPIFFE-compatible URI SAN (`spiffe://<org>/session/<uuid>`)
+  // chained to the workload-identity ROOT (hierarchy 1, D82 — structurally
+  // distinct from the interception root MintInterceptionCA chains to), PLUS a
+  // parallel JWT presentation carrying the §3.1 claim set (`session_uuid`,
+  // `launching_user`, `org`, `repo/branch`, `runtime`, `parent_session`, and the
+  // RESERVED `service_principal` marker), TTL = session lifetime. SPIFFE-
+  // compatible naming now is what makes the M3 SPIRE migration a pure substrate
+  // swap (doc 16 §3.1). The mint also registers/refreshes the session record so
+  // the workload key is on the D22 Validate path and the session is live.
+  //
+  // This is the additive promotion of the former reserved
+  // `rpc MintWorkloadIdentity(...) returns (...)` comment to a real buf-safe
+  // service/RPC + message addition on the already-frozen package — NOT a new
+  // freeze, NOT a break (FREEZE.md identity.v1 row). It mirrors the tested native
+  // `mint.Shim.MintWorkloadIdentity` (identity/mint/mint.go) field-for-field so
+  // a later Go repoint is mechanical (the M0 fakes-first pattern, doc 05 OQ3).
+  rpc MintWorkloadIdentity(MintWorkloadIdentityRequest) returns (MintWorkloadIdentityResponse);
+
+  // RevokeSession marks the session record revoked (doc 16 §5.4; ratified D111 —
+  // the additive M0-window promotion). The minimal CA ships NO CRL/OCSP: this is
+  // TTL-as-revocation plus ACTIVE EVICTION — on suspend/kill/admin-revoke the
+  // session record is marked and the D22 `Validate` session-liveness check then
+  // fails CLOSED for that session (verdict DENY with a machine-readable reason in
+  // the D77 in-band-403 shape), so a stolen still-valid credential fails
+  // immediately (doc 16 §5.4). Revoking an unknown session creates a tombstone so
+  // a later mint/validate races CLOSED, not open. The ack is an idempotent
+  // acknowledgement, never a transport error.
+  //
+  // This is the additive promotion of the former reserved
+  // `rpc RevokeSession(...) returns (...)` comment to a real buf-safe service/RPC
+  // + message addition on the already-frozen package — NOT a new freeze, NOT a
+  // break (FREEZE.md identity.v1 row). It mirrors the tested native
+  // `mint.Shim.RevokeSession` (identity/mint/mint.go) so a later Go repoint is
+  // mechanical (the M0 fakes-first pattern, doc 05 OQ3).
+  rpc RevokeSession(RevokeSessionRequest) returns (RevokeSessionResponse);
+
+  // MintSessionToken mints the scoped per-session BASE token (doc 19 §3; D99/
+  // D97 — the additive M0-window promotion, ratified D111). The token is the
+  // format-opaque presented credential (a serialized Biscuit under the default
+  // substrate, D98) that rides the existing D22 `Validate` seam's
+  // `presented_credential` UNCHANGED (doc 19 §5) — neither a cert pool nor the
+  // workload JWS verifier can even parse it (the §13 structural separation: a
+  // session-token signature must NEVER validate as workload identity nor as
+  // interception material, the THIRD signing context, D99). The base token always
+  // has an EMPTY `parent_session` (doc 19 §3); child hops come from offline
+  // `AttenuateSessionToken` (doc 19 §4: zero mint RPCs as the tree widens), NEVER
+  // a second mint — so attenuation is deliberately NOT an RPC here. The mint also
+  // registers/refreshes the session record so the existing `Validate` seam
+  // re-checks session liveness on every presentation (doc 16 §5.4 / doc 19 §7).
+  //
+  // This is the additive promotion of the former reserved
+  // `rpc MintSessionToken(...) returns (...)` comment to a real buf-safe
+  // service/RPC + message addition on the already-frozen package — NOT a new
+  // freeze, NOT a break (FREEZE.md identity.v1 row). It mirrors the tested native
+  // `mint.Shim.MintSessionToken` (identity/mint/sessiontoken.go) field-for-field
+  // (`MintSessionTokenReq` → request, `SessionTokenBundle` → response) so a later
+  // Go repoint is mechanical (the M0 fakes-first pattern, doc 05 OQ3).
+  rpc MintSessionToken(MintSessionTokenRequest) returns (MintSessionTokenResponse);
+}
+
+// MintInterceptionCARequest asks for one session's interception CA (D17/D82;
+// doc 16 §4: `req: session_uuid`).
+message MintInterceptionCARequest {
+  // The session whose interception CA is being minted — the identity-plane join
+  // key. SessionRef is the SHARED canonical message owned by
+  // `dreamserpent.boundary.v1` (doc 14 §2 / §4: the orchestrator session record
+  // is the authority), imported — never redefined — per the Stage-0 freeze-PR
+  // session-ref unification.
+  dreamserpent.boundary.v1.SessionRef session_ref = 1;
+}
+
+// MintInterceptionCAResponse returns the per-session CA material (doc 16 §4:
+// `resp: per-session CA cert + key (proxy-bound delivery), lifetime = session`).
+message MintInterceptionCAResponse {
+  // The per-session interception CA certificate (PEM/DER bytes), minted under
+  // the interception root (hierarchy 2, D82). Injected into the per-session CoW
+  // overlay trust store fail-closed (doc 16 §4).
+  bytes ca_certificate = 1;
+
+  // The per-session interception CA private key (PEM/DER bytes), PROXY-BOUND:
+  // delivered to ds-tlsproxy for on-the-fly per-origin leaf minting and
+  // destroyed at teardown. Never a root key; the bounded D76 exposure
+  // (doc 16 §4). Session-lifecycle material, the D72-exempt class.
+  bytes ca_private_key = 2;
+
+  // Lifetime = session (doc 16 §4): the CA dies at teardown. Wall-clock UNIX
+  // time; the freeze PR may swap this to google.protobuf.Timestamp as an
+  // additive, wire-compatible refinement.
+  int64 expiry_unix_seconds = 3;
+}
+
+// MintWorkloadIdentityRequest is the MintWorkloadIdentity input — the doc 16
+// §3.1 claim inputs (D111 additive promotion; D82 hierarchy 1). It mirrors the
+// native `mint.WorkloadIdentityRequest` (identity/mint/mint.go) field-for-field
+// so a later Go repoint stays mechanical. The minted leaf chains to the
+// workload-identity root (hierarchy 1), structurally distinct from the
+// interception root (D82).
+message MintWorkloadIdentityRequest {
+  // The session this workload identity is minted FOR — the SPIFFE name's
+  // `session/<session_uuid>` tail and the session-record key. Carried as a bare
+  // string to mirror `mint.WorkloadIdentityRequest.SessionUUID` exactly (the
+  // native shim keys its in-memory session store on this UUID); a later additive
+  // `dreamserpent.boundary.v1.SessionRef session_ref`, as on
+  // MintInterceptionCARequest, can join under the reservation below without a
+  // break. Empty is rejected (the native errEmptySession). Mirrors
+  // `mint.WorkloadIdentityRequest.SessionUUID`.
+  string session_uuid = 1;
+
+  // The IdP subject — the doc 04 §5 attribution promise (doc 16 §3.1
+  // `launching_user`). At M0 the caller-supplied value is trusted verbatim unless
+  // a PrincipalResolver is installed shim-side (doc 16 §11.2: the human-auth step
+  // is a stub at M0, real IdP-asserted subject arrives at M1). Mirrors
+  // `mint.WorkloadIdentityRequest.LaunchingUser`.
+  string launching_user = 2;
+
+  // The org axis of the SPIFFE name `spiffe://<org>/session/<session_uuid>` and
+  // the cert Subject organization (doc 16 §3.1). Mirrors
+  // `mint.WorkloadIdentityRequest.Org`.
+  string org = 3;
+
+  // The repo/branch claim (doc 16 §3.1). Mirrors
+  // `mint.WorkloadIdentityRequest.RepoBranch`.
+  string repo_branch = 4;
+
+  // The runtime claim — e.g. "claude-code" (doc 16 §3.1). Mirrors
+  // `mint.WorkloadIdentityRequest.Runtime`.
+  string runtime = 5;
+
+  // The parent-session claim — the subagent attribution chain (doc 16 §3.1;
+  // per-subagent identity ratified at the milestone level, doc 05 M3). Mirrors
+  // `mint.WorkloadIdentityRequest.ParentSession`.
+  string parent_session = 6;
+
+  // The workload-identity lifetime as a whole-second count; zero means the shim
+  // default session TTL (doc 16 §3.1: TTL = session lifetime, the caller normally
+  // supplies the real session lifetime). The Go model's `time.Duration` is
+  // rendered here as whole seconds (the boundary conversion in server.go is
+  // `time.Duration(ttl_seconds) * time.Second`); a sub-second refinement would be
+  // additive. Mirrors `mint.WorkloadIdentityRequest.TTL`.
+  int64 ttl_seconds = 7;
+
+  // Reserved for forward request growth (e.g. an additive
+  // `dreamserpent.boundary.v1.SessionRef session_ref`, the reserved
+  // `service_principal` D16 marker once the M4 persistent-face authority model
+  // lands, doc 16 §3.1). Additive fields only — a miss is a v2-package event
+  // (FREEZE.md one-shot discipline), so the range is reserved generously.
+  reserved 8 to 31;
+}
+
+// MintWorkloadIdentityResponse is the MintWorkloadIdentity output — the doc 16
+// §3.1 workload-identity document: the X.509 leaf (SPIFFE SAN, hierarchy 1) plus
+// the parallel JWT presentation. It mirrors the native
+// `mint.WorkloadIdentityBundle` (identity/mint/mint.go) field-for-field.
+message MintWorkloadIdentityResponse {
+  // The workload-identity leaf certificate in DER, chained to the workload
+  // root (hierarchy 1, D82). Bytes: opaque cert material. Mirrors
+  // `mint.WorkloadIdentityBundle.CertDER`.
+  bytes cert_der = 1;
+
+  // The SPIFFE-compatible URI SAN `spiffe://<org>/session/<session_uuid>` (doc 16
+  // §3.1) — the identity name, also the grant's identity axis (doc 16 §5.1).
+  // Mirrors `mint.WorkloadIdentityBundle.SPIFFEURI`.
+  string spiffe_uri = 2;
+
+  // The parallel ES256 JWS presentation for header-carried use (doc 16 §3.1) —
+  // the value presented at the D22 Validate seam as `presented_credential`.
+  // Mirrors `mint.WorkloadIdentityBundle.JWT`.
+  string jwt = 3;
+
+  // The bundle horizon (TTL = session lifetime). Wall-clock UNIX seconds, matching
+  // ca_mint.proto's `expiry_unix_seconds`; a freeze-window refinement to
+  // google.protobuf.Timestamp would be additive and wire-compatible. Mirrors
+  // `mint.WorkloadIdentityBundle.Expiry`.
+  int64 expiry_unix_seconds = 4;
+
+  // Reserved for forward response growth (e.g. the doc 19 P-T1 token-lineage
+  // fields — chain/block fingerprints, attenuation depth — should they ride the
+  // mint response, or a separate root-chain echo). Additive fields only.
+  reserved 5 to 31;
+}
+
+// RevokeSessionRequest is the RevokeSession input (doc 16 §5.4): the session to
+// evict plus the operator-supplied cause. It mirrors the native
+// `mint.Shim.RevokeSession(sessionUUID, reason string)` arguments.
+message RevokeSessionRequest {
+  // The session to revoke — keyed on the same UUID the native session store uses
+  // (the in-memory session record `Validate` reads liveness from). Carried as a
+  // bare string to mirror the native `sessionUUID` argument exactly; a later
+  // additive `dreamserpent.boundary.v1.SessionRef session_ref` can join under the
+  // reservation below without a break. Empty is rejected (the native
+  // errEmptySession). Mirrors the native `sessionUUID` argument.
+  string session_uuid = 1;
+
+  // The operator-supplied cause, surfaced VERBATIM as the
+  // `machine_readable_reason` on subsequent `Validate` denials for this session
+  // (doc 16 §5.4 / D77 in-band-403). Empty defaults to "session_revoked"
+  // shim-side. Mirrors the native `reason` argument.
+  string reason = 2;
+
+  // Reserved for forward request growth (e.g. an additive
+  // `dreamserpent.boundary.v1.SessionRef session_ref`, an explicit
+  // revoke-provenance field paralleling hypervisor.v1's `SuspendRequest`).
+  // Additive fields only.
+  reserved 3 to 15;
+}
+
+// RevokeSessionResponse is the RevokeSession ack (doc 16 §5.4): an idempotent
+// acknowledgement that the session record is marked revoked. The native
+// `mint.Shim.RevokeSession` returns only `error`, so the ack carries no payload
+// at M0 — the body is reserved for forward growth (e.g. the effective revoke
+// instant, an idempotency/already-revoked signal). A non-error return IS the ack;
+// it is never a transport error (doc 16 §5.4 active-eviction is in-band, like the
+// D77 Validate 403).
+message RevokeSessionResponse {
+  // Reserved for forward ack growth (e.g. `int64 revoked_at_unix_seconds`, a
+  // `bool already_revoked` idempotency signal). Additive fields only — the native
+  // surface returns no payload today, so the body starts empty.
+  reserved 1 to 15;
+}
+
+// MintSessionTokenRequest is the MintSessionToken input — the doc 19 §3 base-token
+// scoping inputs (D111 additive promotion; D99/D97 — the scoped per-session base
+// token). It mirrors the native `mint.MintSessionTokenReq`
+// (identity/mint/sessiontoken.go) field-for-field so a later Go repoint stays
+// mechanical. `parent_session` is intentionally NOT an input (doc 19 §3/§4: the
+// base token always has an empty `parent_session`; child hops come from offline
+// `AttenuateSessionToken`, never a second mint).
+message MintSessionTokenRequest {
+  // The session this token is minted FOR — the scoping claim `Validate` keys
+  // liveness on (doc 19 §3/§7). Carried as a bare string to mirror
+  // `mint.MintSessionTokenReq.SessionUUID` exactly (the native shim keys its
+  // in-memory session store on this UUID); a later additive
+  // `dreamserpent.boundary.v1.SessionRef session_ref`, as on
+  // MintInterceptionCARequest, can join under the reservation below without a
+  // break. Empty is rejected (the native errEmptySession). Mirrors
+  // `mint.MintSessionTokenReq.SessionUUID`.
+  string session_uuid = 1;
+
+  // The IdP subject / root attribution (doc 04 §5) — resolved through the same
+  // shim PrincipalResolver seam as MintWorkloadIdentity if one is installed, so
+  // the two credentials carry the SAME root attribution and join in audit (doc 19
+  // §9). Mirrors `mint.MintSessionTokenReq.LaunchingUser`.
+  string launching_user = 2;
+
+  // The org claim (doc 19 §3). Mirrors `mint.MintSessionTokenReq.Org`.
+  string org = 3;
+
+  // The repo/branch claim (doc 19 §3). Mirrors
+  // `mint.MintSessionTokenReq.RepoBranch`.
+  string repo_branch = 4;
+
+  // The opaque role reference (doc 19 §11 seam — not designed here). Mirrors
+  // `mint.MintSessionTokenReq.RoleRef`.
+  string role_ref = 5;
+
+  // A reference to the recorded prompt/plan (doc 04 §3 control-plane DB). Mirrors
+  // `mint.MintSessionTokenReq.TaskRef`.
+  string task_ref = 6;
+
+  // The grant-relevant service scope carried in the base token (doc 19 §8) — the
+  // session's requested set; `Validate` intersects grants ∩ token scope. Mirrors
+  // `mint.MintSessionTokenReq.Services`.
+  repeated string services = 7;
+
+  // The token lifetime as a whole-second count; zero means the shim default
+  // session TTL. TTL = session lifetime (doc 19 §3). The Go model's
+  // `time.Duration` is rendered here as whole seconds (the boundary conversion in
+  // server.go is `time.Duration(ttl_seconds) * time.Second`); a sub-second
+  // refinement would be additive. Mirrors `mint.MintSessionTokenReq.TTL`.
+  int64 ttl_seconds = 8;
+
+  // Reserved for forward request growth (e.g. an additive
+  // `dreamserpent.boundary.v1.SessionRef session_ref` slot, a `service_principal`
+  // marker). Additive fields only — a miss is a v2-package event (FREEZE.md
+  // one-shot discipline), so the range is reserved generously.
+  reserved 9 to 31;
+}
+
+// MintSessionTokenResponse is the MintSessionToken output — the doc 19 §3
+// `SessionTokenBundle`: the format-opaque presented credential plus the §7 fleet
+// revocation identifiers and attenuation depth. It mirrors the native
+// `mint.SessionTokenBundle` (identity/mint/sessiontoken.go) field-for-field.
+message MintSessionTokenResponse {
+  // The format-opaque presented credential (a serialized Biscuit under the default
+  // substrate, D98) — rides the D22 `Validate` seam's `presented_credential`
+  // unchanged (doc 19 §5). Bytes: never parsed by consumers, never logged
+  // (fingerprint-only, doc 19 §9). Mirrors `mint.SessionTokenBundle.Token`.
+  bytes token = 1;
+
+  // The token horizon (TTL = session lifetime, doc 19 §3). Wall-clock UNIX
+  // seconds, matching ca_mint.proto's `expiry_unix_seconds` (server.go toUnix); a
+  // google.protobuf.Timestamp refinement would be additive and wire-compatible.
+  // Mirrors `mint.SessionTokenBundle.Expiry`.
+  int64 expiry_unix_seconds = 2;
+
+  // Echoes the root scoping claim `Validate` keys liveness on (doc 19 §7). Mirrors
+  // `mint.SessionTokenBundle.SessionUUID`.
+  string session_uuid = 3;
+
+  // The per-block chain fingerprints the doc 19 §7 fleet revocation list keys on
+  // (one for the base token, +1 per attenuation hop). Fingerprint-only — the token
+  // bytes never appear here. Mirrors `mint.SessionTokenBundle.RevocationIDs`.
+  repeated bytes revocation_ids = 4;
+
+  // The attenuation depth — 0 for the base token; each offline `AttenuateSessionToken`
+  // hop +1 (doc 19 §4). Mirrors `mint.SessionTokenBundle.AttenuationDepth`.
+  int32 attenuation_depth = 5;
+
+  // Reserved for forward response growth (e.g. the doc 19 P-T1 token-lineage
+  // parity fields, a `root_session` echo). Additive fields only.
+  reserved 6 to 31;
+}

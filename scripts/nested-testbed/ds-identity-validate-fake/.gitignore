@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: Apache-2.0
+# Built binary from `go build` in this directory (module name = ds-identity-validate-fake).
+/ds-identity-validate-fake

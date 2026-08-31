@@ -1,0 +1,26 @@
+# drift class: COMPOUND — both reader surfaces drift at once, under INDEPENDENT
+#   causes. A blocklist entry domain is uppercase (resolver-lock SHAPE drift) AND
+#   a guardrail rule omits its mandatory rung (POL-1 SCHEMA drift).
+# named edge shape: uppercase blocklist FQDN (Go) + missing guardrail rung (Rust).
+# expected verdict (go, rust) = (reject, reject)  <-- compound both-reject, DIFFERENT causes
+# Go: ErrBadFQDN — validateFQDN enforces D74 exact-FQDNs-only, lowercase; the
+#     `DNS.example` domain carries an uppercase byte, so the scanner fails loudly.
+#     This is a resolver-lock SHAPE rejection on the blocklist; the Go scanner
+#     never reads guardrails, so the missing guardrail rung is invisible to it.
+# Rust: MissingRung — parse_layer tolerates an uppercase blocklist domain (it is
+#     not the FQDN-case tripwire; the Go offline half is); the rejection comes from
+#     the guardrail rule omitting its mandatory rung (§7 (a) / D53, the
+#     GuardrailRule.rung field is non-optional), a cause the Go side cannot see.
+#     The two causes are INDEPENDENT: the Go cause is the uppercase FQDN SHAPE on
+#     the BLOCKLIST, the Rust cause is the missing rung on a GUARDRAIL rule.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+guardrails:
+  - id: egress-rate-1
+    class: egress
+blocklist:
+  - domain: DNS.example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

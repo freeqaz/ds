@@ -1,0 +1,19 @@
+# Data-plane dependency policy.
+#
+# RATIFIED PERMANENT POLICY — D146 (2026-07-01, maintainer ruling): the WHOLE
+# data-plane workspace resolves dependencies from crates.io, pinned by Cargo.lock
+# and built `--locked`; it is NOT source-vendored. D146 supersedes the "pinned AND
+# vendored" clause of D40 (Pingora) and D67 (hickory) — pinning is kept, vendoring
+# is dropped. The [source.*] redirect below stays DISABLED and the vendor/ tree is
+# retired (its removal is a mechanical follow-up). Do NOT re-enable vendoring or
+# re-run `cargo vendor`: reproducibility is guaranteed by Cargo.lock + `--locked`,
+# and the ring-backed TLS crates fetch from crates.io behind the team's authorized
+# proxy-bypass. (History: vendoring was ACTIVATED for the ds-dnsgate/hickory
+# pre-stage, then disabled for the TLS-3 ring-backed crates; D146 makes crates.io
+# the standing rule for the entire workspace.)
+#
+# [source.crates-io]
+# replace-with = "vendored-sources"
+#
+# [source.vendored-sources]
+# directory = "vendor"

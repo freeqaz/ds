@@ -1,0 +1,7 @@
+{
+  "_comment": "Synthetic VIOLATION viewer set: a spectator-role live-view participant whose emitted input event was accepted into the session. The check must FAIL NAMED with spectator-input-accepted-into-session — this is the regression the re-filed doc 06 §3c row exists to catch (a read-only spectator must NOT be able to inject input; D61).",
+  "viewers": [
+    { "name": "driver-seat", "role": "driver", "input_accepted": true },
+    { "name": "spectator-mallory", "role": "spectator", "input_accepted": true }
+  ]
+}

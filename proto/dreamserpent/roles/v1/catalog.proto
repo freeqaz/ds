@@ -1,0 +1,385 @@
+// The session-role catalog READ path — RoleCatalogService.ListRoles / GetRole
+// (doc 18 §4/§6 seam 2; D89–D96, the roles design ratified 2026-06-12). It is
+// the catalog read API the orchestrator serves wherever CreateSession is — incl.
+// orchestrator-lite, the OSS single-host all-in-one (D80) — so a client can
+// enumerate the built-in role catalog and read one role's pinned identity +
+// composition. [OSS] public contract (D24/D58/D80/D93): orchestrator-lite (OSS)
+// and the paid fleet control plane implement the SAME package.
+//
+// READ-PATH-ONLY FREEZE — THE STRUCTURAL INVARIANT THIS FILE HOLDS AND STATES.
+// This package freezes ONLY the read path (ListRoles / GetRole). The WRITE path
+// — PutRole + the widening-ratification verbs — is DEFERRED to the M2 product
+// band (doc 18 OQ5; doc 15 §5.3, beside enrollment and policy authoring) and is
+// NOT implemented here. It is RESERVED (the reserved-RPC comments on the service,
+// the generous field-number reservations on every message) so it lands ADDITIVELY
+// later without a v2 package. NOTHING in this file pre-ratifies the M2 write
+// design — no PutRole shape, no ratification-verb shape, no widening-mutation
+// message is committed; the reservations only keep room. The READ contract here
+// makes no claim about how a role is published or ratified.
+//
+// THE ROLE SHAPE MIRRORS roles/SCHEMA.md (role/v0) FIELD-FOR-FIELD. The Role
+// message is the wire projection of a checked-in roles/*.yaml validated by the
+// `policy-core::role` machine validator (doc 18 §5; roles/SCHEMA.md). It carries
+// all five composition axes (doc 18 §2/§5) as REFERENCES + the pinned identity
+// triple `(name, version, content_hash)` (doc 18 §7, D92). It is a TEMPLATE +
+// REFERENCE document, NEVER credential material (D39/D8; roles/SCHEMA.md rule 4):
+// the credential axis carries `services[]` + `mode` only.
+//
+// THE one-shot freeze (proto/FREEZE.md): a field missed at this NEW-PACKAGE flip
+// is a v2-package event, not a patch — so every read field the SCHEMA / doc 18
+// names is present, and the field-number ranges below reserve generously for the
+// M2 write path and forward read-field growth.
+//
+// CROSS-PACKAGE OWNERSHIP / WHAT MUST NOT LIVE HERE (roles/v1 README; doc 18 §6):
+//   - the `role_ref` field on CreateSessionRequest is one optional field in
+//     dreamserpent.orchestrator.v1 (D95/D106, INCLUDED there at its M0 freeze) —
+//     NOT a roles.v1 message and never re-declared here;
+//   - POL-1 schema fields are ds-contracts' (doc 13 §3); the role's `policy`
+//     block here is the role's restricted PROJECTION (references + posture), not
+//     a POL-1 layer document;
+//   - skill / image artifact REGISTRIES are named gaps (doc 18 OQ2/OQ3) with
+//     their own future seams — roles carry only the strawman REFS;
+//   - no credential material of any kind (D39, doc 18 §8).
+syntax = "proto3";
+
+package dreamserpent.roles.v1;
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/roles/v1;rolesv1";
+
+// RoleCatalogService is the session-role catalog API (doc 18 §6 seam 2). At this
+// freeze it serves the READ path ONLY — ListRoles / GetRole — needed by M0's
+// orchestrator-lite and the CLI (doc 18 §4 point 3; D80/D90). Each RPC takes a
+// `<Verb>Request` and returns a `<Verb>Response` per buf STANDARD
+// (RPC_REQUEST_RESPONSE_UNIQUE), so a reply grows optional fields post-freeze
+// without a v2 (the orchestrator.v1 ListSessions precedent).
+//
+// WRITE PATH RESERVED — M2-DEFERRED (doc 18 OQ5; doc 15 §5.3 M2 product band).
+// The catalog WRITE verbs are NOT part of this freeze and are NOT implemented.
+// They are reserved here as comments so they land additively when the M2 write
+// design ratifies — adding an RPC to an existing service is buf-safe (additive),
+// so this read-path freeze never forces a v2 when the write path arrives:
+//
+//   // rpc PutRole(PutRoleRequest) returns (PutRoleResponse);
+//   //   — publish/update a role version into the org catalog (the catalog
+//   //     mutation, actor-recorded, doc 18 §7). M2-DEFERRED; the request/response
+//   //     shapes design with the M2 product band (doc 18 OQ5) — NOTHING here
+//   //     pre-ratifies them.
+//   // rpc RatifyRoleWidening(RatifyRoleWideningRequest) returns (RatifyRoleWideningResponse);
+//   //   — org-admin ratification that flips a role version's widenings from inert
+//   //     to admitted (doc 18 §9, D91). The actor-recorded catalog act. M2-DEFERRED.
+//   // rpc DeleteRole(DeleteRoleRequest) returns (DeleteRoleResponse);
+//   //   — retire a catalog role version (doc 18 §7 catalog mutation). M2-DEFERRED.
+service RoleCatalogService {
+  // ListRoles enumerates the catalog's roles — the built-in four at M0
+  // (default / developer / researcher / security-engineer, doc 18 §5; backed at
+  // M0 by the checked-in roles/*.yaml, D50). The response also names the recorded
+  // default (`default@<current>`, doc 18 §7) so "no role" and "default role" read
+  // as the same auditable fact. Read-only; no catalog mutation.
+  rpc ListRoles(ListRolesRequest) returns (ListRolesResponse);
+
+  // GetRole reads ONE role by ref (`<name>` or `<name>@<version>`; empty ref
+  // resolves the recorded default — doc 18 §7). An unknown/unresolvable ref is a
+  // NotFound, the read-path analog of the create-time structural refusal
+  // (doc 18 §6 row 1–2). Read-only; no catalog mutation.
+  rpc GetRole(GetRoleRequest) returns (GetRoleResponse);
+}
+
+// ScopeMode is the credential-scope template's read/write disposition
+// (roles/SCHEMA.md axis (d) / rule 4; doc 18 §8). STRAWMAN vocabulary — the
+// caveat language proper belongs to the identity scoped-token pass (doc 18 §8 /
+// doc 19). It is part of the role's HASHED projection (roles/SCHEMA.md rule 5),
+// so it rides the pinned content_hash.
+enum ScopeMode {
+  // The proto3 zero value (buf-STANDARD _UNSPECIFIED zero). A present scope
+  // template MUST set READ_ONLY or READ_WRITE explicitly; UNSPECIFIED means the
+  // field was never set (distinguishable from a deliberate read-only), never a
+  // wire default for "read-only".
+  SCOPE_MODE_UNSPECIFIED = 0;
+  // read-only: the role grants no write/mutate disposition (roles/SCHEMA.md:
+  // researcher / security-engineer). The actual enforcement is the read-only
+  // scope template's intersection at mint (doc 16 §5.1), not this label.
+  SCOPE_MODE_READ_ONLY = 1;
+  // read-write: the role's template permits write-capable grants (roles/SCHEMA.md:
+  // developer — commits are the point).
+  SCOPE_MODE_READ_WRITE = 2;
+
+  // Reserved for forward mode growth (e.g. a finer caveat vocabulary the doc 19
+  // scoped-token pass introduces). A new mode is an additive enum value, never a
+  // v2.
+  reserved 3 to 15;
+}
+
+// ImageLayers is axis (a) — the role's content-addressed tool layers added atop
+// the env-spec-resolved image (roles/SCHEMA.md `image.layers[]`; doc 18 §2 axis
+// (a), owned by the Image & cache builder). REFERENCES ONLY — never inline
+// content (roles/SCHEMA.md rule 1; an inline entry is a validator parse
+// rejection). The ref format is a STRAWMAN (`images:layer/<name>@<digest>`,
+// doc 18 OQ2/OQ3); the registry is a named gap, so these are strawman refs at
+// M0. NOT part of the hashed projection (roles/SCHEMA.md rule 5 hashes only the
+// grant/policy/identity fields); surfaced on the read API for inspection.
+message ImageLayers {
+  // The content-addressed tool-layer refs, in catalog (author) order. Empty for
+  // a role that adds no layer (the `default` role: env-spec-resolved image only).
+  repeated string refs = 1;
+
+  // Reserved for forward image-axis growth (e.g. a per-layer digest/identity
+  // sub-message once the Image & cache builder's OQ3 composition lands, doc 18
+  // OQ3 / images/golden/IMAGE-IDENTITY.md). Additive fields only.
+  reserved 2 to 15;
+}
+
+// Skills is axis (b) — the skill bundles installed into the session
+// (roles/SCHEMA.md `skills.install[]`; doc 18 §2 axis (b)). REFERENCES ONLY
+// (roles/SCHEMA.md rule 1); the skill-artifact REGISTRY is a NAMED GAP (doc 18
+// OQ2) — strawman refs only (`skills:<bundle>@<version>`), no install path is
+// built until the gap closes. NOT part of the hashed projection; surfaced for
+// inspection.
+message Skills {
+  // The skill-bundle refs, in catalog order. Empty for a role that installs no
+  // skill (the `default` role).
+  repeated string install = 1;
+
+  // Reserved for forward skill-axis growth (the registry shape the doc 18 OQ2
+  // gap will introduce — content addressing, install mechanics). Additive only.
+  reserved 2 to 15;
+}
+
+// RolePolicy is axis (c) — the role's RESTRICTED policy PROJECTION that compiles
+// to ONE POL-1 session-layer document (roles/SCHEMA.md `policy`; doc 18 §2 axis
+// (c)). It is NOT a POL-1 layer document (those live in ds-contracts, doc 13 §3,
+// proto/README.md "What must NOT live here") — it carries the role's posture +
+// the WIDENING-REQUEST inputs the §9 gate reads. The hashed projection
+// (roles/SCHEMA.md rule 5) is {allowlist, pack_families, posture}.
+message RolePolicy {
+  // The network posture (roles/SCHEMA.md: locked | standard | open, doc 13 §2). A
+  // role may be NARROWER than the org default; never effectively wider (rule 3).
+  // A bare string mirrors the YAML strawman (the validator pins the vocabulary,
+  // doc 13 §2); part of the hashed projection.
+  string posture = 1;
+
+  // Tier-flip requests (roles/SCHEMA.md `pack_families`, e.g. binary-cdn:
+  // enabled). A WIDENING request beyond the org envelope is INERT until catalog
+  // ratification (doc 18 §9, D91) — logged warning, admits nothing. Carried as
+  // the request KEYS (the YAML flow-map keys), order-free; part of the hashed
+  // projection. Empty `{}` for a role requesting no tier flip.
+  repeated string pack_families = 2;
+
+  // Extra domain entries (roles/SCHEMA.md `allowlist[]`). SAME ratification gate
+  // as pack_families — a widening entry beyond the org envelope is inert until
+  // ratified (doc 18 §9). Carried as the canonical FQDN tokens (the §9 widening
+  // posture form; the YAML's `{ fqdn, ports, evidence }` rows project to their
+  // fqdn). Part of the hashed projection. Empty for no widening.
+  repeated string allowlist = 3;
+
+  // Reserved for forward policy-axis growth. NOTABLY: the role's `guardrails[]`
+  // (D52-class rules, doc 13 rung caps, roles/SCHEMA.md rule 2) are NOT in the
+  // hashed projection and are NOT surfaced on the read API at this freeze — a
+  // later additive `repeated RoleGuardrail guardrails` field (once the role
+  // compiler's guardrail shape is specified, roles/SCHEMA.md note) rides this
+  // reservation without a v2. Additive fields only.
+  reserved 4 to 15;
+}
+
+// CredentialScopeTemplate is axis (d) — the credential-scope TEMPLATE that
+// narrows what MintGrants would otherwise issue (roles/SCHEMA.md
+// `credentials.scope_template`; doc 18 §2 axis (d) / §8, D96). It NARROWS the
+// env-spec × `services[]` grant envelope by INTERSECTION (doc 16 §5.1) and is
+// NEVER credential material (D39/D8; roles/SCHEMA.md rule 4): it carries
+// `services[]` + `mode` only.
+//
+// THE NULL vs PRESENT-EMPTY BOUNDARY IS LOAD-BEARING (roles/SCHEMA.md rule 4;
+// doc 18 §8): `scope_template: null` (NO narrowing — the full envelope, the
+// `default` role) is DISTINCT from a present template with `services: []` (empty
+// intersection — mint nothing, the `researcher` role). On the wire this is the
+// `scope_template_present` flag on Role: present=false carries this whole message
+// absent (the null boundary); present=true carries it (services may be empty).
+// The two survive as distinct canonical bytes → distinct content_hash (rule 5).
+message CredentialScopeTemplate {
+  // The subset of the org `services[]` registry keys the role's grants are
+  // narrowed to (roles/SCHEMA.md). `[]` = empty intersection = mint nothing (the
+  // `researcher` role). Part of the hashed projection. NEVER a credential — a
+  // registry KEY only.
+  repeated string services = 1;
+
+  // The template's read/write disposition (ScopeMode; roles/SCHEMA.md `mode`).
+  // Part of the hashed projection.
+  ScopeMode mode = 2;
+
+  // Reserved for forward template growth (the caveat vocabulary, D84 path-prefix
+  // interaction, and post-mint attenuability the doc 18 §8 / doc 19 scoped-token
+  // pass owns — doc 18 OQ6). Additive fields only.
+  reserved 3 to 15;
+}
+
+// RoleRuntime is axis (e) — the runtime config overlay, OPAQUE to the
+// orchestrator (roles/SCHEMA.md `runtime`; doc 18 §2 axis (e), D38/D20). The
+// orchestrator never inspects it; it is passed inside `entrypoint_config_ref`
+// (doc 15 §4.1 step 8). NOT part of the hashed projection. Surfaced as the bare
+// ref for inspection.
+message RoleRuntime {
+  // The opaque entrypoint-config overlay ref (roles/SCHEMA.md
+  // `entrypoint_config_overlay_ref`). Empty (the YAML `null`) for a role with no
+  // overlay. NEVER inspected by the orchestrator (D38/D20).
+  string entrypoint_config_overlay_ref = 1;
+
+  // Reserved for forward runtime-axis growth. Additive fields only.
+  reserved 2 to 15;
+}
+
+// Role is the wire projection of one role/v0 catalog document (roles/SCHEMA.md;
+// doc 18 §2/§5/§7). It mirrors the checked-in roles/*.yaml the `policy-core::role`
+// validator enforces — the pinned IDENTITY triple (D92) plus the five composition
+// axes as REFERENCES + TEMPLATE (never credential material, D39). The READ API
+// returns this projection; the catalog (org-hosted, or the M0 checked-in YAML
+// backing store) is the authority.
+message Role {
+  // --- Identity (the pinned triple, roles/SCHEMA.md rule 5 / doc 18 §7, D92) ---
+
+  // The catalog key (roles/SCHEMA.md `name`, [a-z0-9-]; never attack/redteam
+  // vocabulary, doc 06 §3c). Built-ins: default | developer | researcher |
+  // security-engineer.
+  string name = 1;
+
+  // The role's content IDENTIFIER (roles/SCHEMA.md `version`, e.g.
+  // "2026.06.11-v1"). Cited in provenance; NEVER a second version namespace
+  // (roles/SCHEMA.md rule 5 / doc 13 §1 rule 3 analog). Pinned per session as
+  // part of the `(name, version, content_hash)` triple.
+  string version = 2;
+
+  // The role_content_hash (roles/SCHEMA.md rule 5; doc 18 §7) — SHA-256 (full 32
+  // bytes) over the produce-once RFC 8785 (JCS) canonical-JSON payload of the
+  // role document, via the SAME canonical-serialization machinery the
+  // PolicySnapshot content_hash uses (one spec, not two). Bytes (the raw 32-byte
+  // digest), matching the orchestrator.v1 Session.pinned_role_content_hash bytes
+  // field; a hex rendering is the caller's. The catalog's
+  // content-hash-goldens.json is the anchored source (the cross-module agreement).
+  bytes content_hash = 3;
+
+  // The schema version of the role document (roles/SCHEMA.md `schema_version`,
+  // e.g. "role/v0"). Part of the hashed projection (roles/SCHEMA.md rule 5).
+  string schema_version = 4;
+
+  // A human description (roles/SCHEMA.md `description`). NOT part of the hashed
+  // projection; informational.
+  string description = 5;
+
+  // --- The five composition axes (doc 18 §2; roles/SCHEMA.md) ---
+
+  // Axis (a): content-addressed tool layers (ImageLayers). Absent message = no
+  // layers (the `default` role).
+  ImageLayers image = 6;
+
+  // Axis (b): installed skill bundles (Skills). Absent message = no skills.
+  Skills skills = 7;
+
+  // Axis (c): the restricted policy projection + the §9 widening posture
+  // (RolePolicy). The role's posture/widening-request inputs.
+  RolePolicy policy = 8;
+
+  // Axis (d): the credential-scope TEMPLATE (CredentialScopeTemplate). The
+  // null-vs-present boundary (roles/SCHEMA.md rule 4 / doc 18 §8) rides
+  // `scope_template_present` below: when false, THIS field is absent (the `null`
+  // template — no narrowing, full envelope — the `default` role); when true, this
+  // field is present (services may be empty = mint nothing — the `researcher`
+  // role). NEVER credential material (D39).
+  CredentialScopeTemplate scope_template = 9;
+
+  // Distinguishes `scope_template: null` (false → no narrowing, full envelope —
+  // roles/SCHEMA.md rule 4 boundary) from a PRESENT template (true → scope_template
+  // set, services possibly empty). It is the wire form of the load-bearing
+  // null-vs-present-empty distinction the content_hash preserves (rule 5):
+  // present=false omits scope_template entirely (the null), present=true carries
+  // it. A consumer MUST read this flag, not just scope_template's presence, to be
+  // robust to a future additive change.
+  bool scope_template_present = 10;
+
+  // Axis (e): the opaque runtime overlay (RoleRuntime). Absent message = no
+  // overlay (the YAML `null`).
+  RoleRuntime runtime = 11;
+
+  // --- §9 widening posture (the read-API surfacing of the gate inputs) ---
+
+  // Whether THIS role version's widenings are org-RATIFIED (doc 18 §9, D91 — the
+  // actor-recorded catalog act). The built-in catalog ships every role UNRATIFIED
+  // (ratification is an org-admin act, never a checked-in fact), so at M0 this is
+  // false for every built-in. A role with no widenings is trivially "ratified"
+  // (nothing to gate). When false AND the policy block requests widenings, those
+  // widenings ride INERT at create (logged warning, admitting nothing — the doc
+  // 13 §1 rule-7 pattern). Surfaced so a catalog reader sees the gate disposition.
+  bool widenings_ratified = 12;
+
+  // Reserved GENEROUSLY for forward read-field growth AND for read-surfacings the
+  // M2 write path will want additively (e.g. a created_at/published_at audit
+  // timestamp, the actor who published the version, a catalog UUID distinct from
+  // the (name,version) key, a future `repeated RoleGuardrail guardrails`
+  // surfacing). A field missed at this one-shot freeze is a v2 — so the range is
+  // wide. Additive fields only.
+  reserved 13 to 50;
+}
+
+// ListRolesRequest filters/pages the catalog enumeration (doc 18 §6 read path).
+// At M0 the catalog is the four built-ins (no filter is load-bearing yet); the
+// paging + filter fields are present so a large hosted catalog grows into them
+// without a v2 (the orchestrator.v1 ListSessionsRequest precedent).
+message ListRolesRequest {
+  // Optional page size (0 = the server default). Forward-compatible paging.
+  uint32 page_size = 1;
+
+  // Optional page token from a prior response's next_page_token. Empty = first
+  // page.
+  string page_token = 2;
+
+  // Reserved for forward filter growth (e.g. a name-prefix or
+  // ratified-only filter once a hosted catalog is large). Additive fields only.
+  reserved 3 to 15;
+}
+
+// ListRolesResponse pages the enumeration and names the recorded default
+// (doc 18 §6/§7). The default is named so a client reads "no role" and "default
+// role" as the same auditable fact (doc 18 §7, D92).
+message ListRolesResponse {
+  // The catalog's roles (the built-in four at M0). Each is the full Role
+  // projection.
+  repeated Role roles = 1;
+
+  // The recorded current default role's NAME (`default` at M0, doc 18 §7); the
+  // create resolves an absent role_ref to `<default_role>@<current>`. Named here
+  // so the default is an explicit catalog fact, never inferred.
+  string default_role = 2;
+
+  // The continuation token for the next page; empty when the enumeration is
+  // complete.
+  string next_page_token = 3;
+
+  // Reserved for forward response growth (e.g. a total count, a catalog
+  // content-hash/etag for change detection). Additive fields only.
+  reserved 4 to 15;
+}
+
+// GetRoleRequest names ONE role to read (doc 18 §6 read path). The ref is the
+// recorded `<name>@<version>` form, a bare `<name>` (resolves the recorded
+// current version), or empty (resolves the recorded default — doc 18 §7). A
+// future catalog-UUID ref also rides this string (doc 18 §6 "catalog UUID").
+message GetRoleRequest {
+  // The role ref: `<name>` | `<name>@<version>` | "" (the recorded default,
+  // doc 18 §7). An unknown/unresolvable ref is a NotFound on GetRole.
+  string role_ref = 1;
+
+  // Reserved for forward request growth (e.g. an explicit
+  // include-historical-version flag once the hosted catalog serves history).
+  // Additive fields only.
+  reserved 2 to 15;
+}
+
+// GetRoleResponse wraps the one resolved Role (doc 18 §6 read path). The wrapper
+// keeps the reply additive-extensible (it can grow optional per-read fields —
+// e.g. a resolved-from-default marker — post-freeze without a v2).
+message GetRoleResponse {
+  // The resolved role. An unknown/unresolvable ref is surfaced as a gRPC NotFound
+  // status, not an empty Role here (so "the ref is bad" is unambiguous).
+  Role role = 1;
+
+  // Reserved for forward response growth (e.g. a `bool resolved_from_default`
+  // marking that an empty ref resolved the recorded default). Additive only.
+  reserved 2 to 15;
+}

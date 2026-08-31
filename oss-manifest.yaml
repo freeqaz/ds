@@ -1,0 +1,70 @@
+# oss-manifest.yaml — the authoritative, machine-readable OSS path list.
+#
+# This file IS the scope of the root Apache-2.0 LICENSE (D25). One source of
+# truth: the CI separability gate and the human-readable license map below read
+# the same file, so they cannot drift apart.
+#
+# In this public repository every tracked path is Apache-2.0 — the proprietary
+# and internal-only trees the D80 service-boundary split carves out are simply
+# not present here, so `excluded_paths` is empty.
+#
+# PER-TREE LICENSE MAP (the human-readable header):
+#   proto/        Apache-2.0  — ALL contracts are public (D24/D58/D80)
+#   boundary/     Apache-2.0  — D26 public executable-spec subset
+#   dataplane/    Apache-2.0  — the open data plane (D15)
+#   orchestrator/ Apache-2.0  — incl. orchestrator-lite, the OSS all-in-one (D80)
+#   roles/        Apache-2.0  — session-role schema + built-ins (doc 18, proposed; Orchestrator stewards)
+#   vm/           Apache-2.0
+#   client/       Apache-2.0  — CLI/TUI/wrapper (D15)
+#   serpent-tui/  Apache-2.0  — standalone TUI module (outside go.work)
+#   identity/     Apache-2.0  — mint, kv-client explicitly OSS (D85)
+#   images/       Apache-2.0  — tooling only; Nexus is a buy (D41)
+#   infra/        Apache-2.0  — tooling
+#   assurance/    Apache-2.0
+#   scripts/      Apache-2.0  — repo tooling, lints, taskdb, operator scripts
+#   docs/         Apache-2.0
+#
+# Rule of the line (D80): the OSS/paid split runs on service/directory
+# boundaries, never inside a binary. A proprietary tree may import only
+# proto/gen/go — never OSS service internals — and no path listed here may
+# depend on a path that is not listed (the separability gate).
+
+version: 0
+license: Apache-2.0
+
+oss_paths:
+  - README.md
+  - LICENSE
+  - Makefile
+  - setup-repo.sh
+  - guardrail-map.yaml
+  - oss-manifest.yaml
+  - go.work
+  - .gitattributes
+  - .gitignore
+  - .gitleaks.toml
+  - .trivyignore
+  - .github/
+  - docs/
+  - scripts/
+  - proto/
+  - boundary/
+  - dataplane/
+  - orchestrator/
+  - roles/
+  - vm/
+  - client/
+  - serpent-tui/
+  - identity/
+  - images/
+  - infra/
+  - assurance/contract-harness/
+  - assurance/conformance-adapter/
+  - assurance/advisory-mirror/
+  - assurance/guardrail-conformance/
+  - assurance/e2e/
+  - assurance/benchmarks/
+  - assurance/README.md
+
+# Nothing in this repository is excluded from the Apache-2.0 release.
+excluded_paths: []

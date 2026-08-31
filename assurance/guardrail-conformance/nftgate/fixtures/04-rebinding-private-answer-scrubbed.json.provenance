@@ -1,0 +1,1 @@
+{"ds_fixture":{"provenance":"synthetic","seam":"guardrail-conformance/nftgate dns-rebinding-fails (doc 06 §3c; DNS-4 + NFT-3)","created":"2026-06-13","note":"hand-authored rebinding case: an approved name re-resolves to an RFC1918 private address; DNS-4 rule 2 scrubs it and re-admission never silently widens the set; never a live resolution (D50)."}}

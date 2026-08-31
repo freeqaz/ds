@@ -1,0 +1,12 @@
+# .trivyignore — CVEs accepted/deferred with documented rationale.
+# Entries here suppress Trivy findings in security.yml's filesystem scan.
+# Each entry MUST include: CVE, affected package, constraint blocking the fix,
+# and the condition that removes this ignore (i.e. what needs to change).
+
+# CVE-2026-41066 — lxml information disclosure via untrusted XML
+# Affected: scripts/taskdb/searchsvc/uv.lock (lxml 6.0.4)
+# Fix available: lxml >= 6.1.0
+# Blocked by: inscriptis 2.7.1 requires lxml>=5.4.0,<6.1.0 (hard upper-bound)
+# Remove when: inscriptis releases a version that allows lxml>=6.1.0,
+#              then run `uv lock --upgrade-package lxml` in scripts/taskdb/searchsvc/
+CVE-2026-41066

@@ -1,0 +1,41 @@
+# drift class: COMPOUND, MULTI-CAUSE — both reader surfaces drift at once, and the
+#   Rust SCHEMA surface drifts under TWO INDEPENDENT causes on ONE document. A
+#   blocklist entry domain is uppercase (resolver-lock SHAPE drift) AND a
+#   baseline-pack family declares an unknown tier AND a baseline-pack entry omits
+#   mandatory provenance (two distinct POL-1 SCHEMA drifts).
+# named edge shape: uppercase blocklist FQDN (Go) + unknown family tier AND
+#   provenance-less baseline-pack entry (Rust, co-collected).
+# expected verdict (go, rust) = (reject, reject)  <-- compound both-reject, DIFFERENT causes
+# Go: ErrBadFQDN — validateFQDN enforces D74 exact-FQDNs-only, lowercase; the
+#     `DNS.example` blocklist domain carries an uppercase byte, so the scanner fails
+#     loudly. This is a resolver-lock SHAPE rejection on the blocklist; the Go
+#     scanner never inspects baseline_pack families or entries (they are column-0
+#     keys that close the `blocklist:` section), so BOTH Rust causes are invisible
+#     to it. The Go declared set is the SINGLETON {ErrBadFQDN}, mirroring row 23.
+# Rust: {BadValue, MissingProvenance} — parse_layer tolerates an uppercase blocklist
+#     domain (it is not the FQDN-case tripwire; the Go offline half is) and COLLECT-
+#     ALLs the schema drift (§8.1 collect-all): build_pack pushes BadValue for
+#     Tier::parse("turbo") on the `core` family WITHOUT short-circuiting, then
+#     validate_layer pushes MissingProvenance for the entry omitting
+#     `provenance_source_url` + `evidence` (§8.1 (e) / D74), and parse_layer APPENDS
+#     the validate bundle onto the build bundle. So ONE committed document carries a
+#     genuine MULTI-ELEMENT distinct code set — the FIRST RejectExact set on
+#     committed data that is not a singleton. The three causes are INDEPENDENT: the
+#     Go cause is the uppercase FQDN SHAPE on the BLOCKLIST, the two Rust causes are
+#     the unknown TIER on a FAMILY and the missing PROVENANCE on an ENTRY — three
+#     sections, three schemas, none masking another.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+baseline_pack:
+  families:
+    core: { tier: turbo }
+  entries:
+    - fqdn: api.example
+      family: core
+      ports: [443]
+blocklist:
+  - domain: DNS.example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

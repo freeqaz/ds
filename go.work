@@ -1,0 +1,26 @@
+// go.work — developer convenience across the repo's Go modules.
+//
+// DELIBERATE EXCLUSION: boundary/ is NOT in this workspace (skeleton design
+// Part 4, resolution 17). The boundary harness is the executable specification
+// (D26) — RED by design and never built together with production code; it is
+// satisfied from the outside via assurance/conformance-adapter/. Keeping it
+// out of go.work makes "the harness never links production packages" a
+// property of the build, not a convention. Note: workspace mode makes
+// cross-imports between the modules below *resolvable*, so the rule that
+// proto/gen/go is the only legal cross-tree import is a convention — enforced
+// by the CI import-boundary gate, not by the toolchain.
+//
+// boundary/ has its own go.mod and is exercised by its own CI lane
+// (vet + build + compile-only test).
+
+go 1.25.11
+
+use (
+	./assurance/conformance-adapter
+	./assurance/contract-harness
+	./client
+	./identity/grant-service
+	./orchestrator
+	./proto/gen/go
+	./vm
+)

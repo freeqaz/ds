@@ -1,0 +1,64 @@
+# cargo-deny configuration for the data-plane workspace.
+# Run by .github/workflows/rust-dataplane.yml.
+#
+# Three jobs:
+#   1. licenses   — the data plane is OSS (Apache-2.0, D25); every dependency must
+#                   carry a compatible license.
+#   2. bans       — D33 cloud-agnosticism gate: no cloud-provider SDK may enter the
+#                   data plane. The boundary must run identically on virtual metal,
+#                   bare metal, and any cloud (D31/D33).
+#   3. advisories — RUSTSEC mirroring is operational, not aspirational (doc 14 §9):
+#                   ds-dnsgate is the fleet's only resolver, so an unpatched hickory
+#                   advisory window is a fleet availability incident.
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace-internal crates are wired by `{ path = "..." }` with no version (the
+# Rust idiom for local path deps). cargo-deny 0.18.x counts a versionless path
+# dep as a wildcard, so without this every internal crate trips wildcards=deny.
+# allow-wildcard-paths exempts PATH dependencies only — registry/git deps still
+# must be version-pinned. (D40/D67 dependency discipline is unaffected.)
+allow-wildcard-paths = true
+deny = [
+    # D33: no cloud SDKs in the data plane — ever.
+    { crate = "aws-sdk-*" },
+    { crate = "aws-config" },
+    { crate = "azure_core" },
+    { crate = "azure_identity" },
+    { crate = "google-cloud-*" },
+    { crate = "gcp_auth" },
+]
+
+[advisories]
+version = 2
+yanked = "deny"
+# Regression corpus (doc 14 §9): RUSTSEC-2026-0118 (hickory NSEC3 loop) and
+# RUSTSEC-2026-0119 (hickory compression bomb) are mirrored as wire-driven TESTS in
+# the doc 06 (a)/(c) suites, NEVER silenced here. Landed reproductions (stub client
+# over the wire against a listening gate, not a hickory API):
+#   dataplane/services/ds-dnsgate/tests/framework_validation.rs
+#     ::rustsec_2026_0118_nsec3_loop_bounded
+#     ::rustsec_2026_0119_compression_bomb_bounded
+# Spec source / back-link: assurance/advisory-mirror/advisories/RUSTSEC-2026-0118.yaml
+# and RUSTSEC-2026-0119.yaml (mirrored_test fields). ignore stays empty: a real
+# advisory is fixed by moving the pin under the migration budget (D67), not ignored.
+ignore = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,0 +1,29 @@
+# drift class: COMPOUND — both reader surfaces drift at once, under INDEPENDENT
+#   causes. A blocklist entry omits its `reason:` (resolver-lock SHAPE drift) AND
+#   a baseline-pack entry omits mandatory provenance (POL-1 SCHEMA drift).
+# named edge shape: blocklist entry sans reason (Go) + baseline-pack entry sans
+#   provenance (Rust).
+# expected verdict (go, rust) = (reject, reject)  <-- compound both-reject, DIFFERENT causes
+# Go: ErrEntryMissingFields — the scanner harvests the `- domain:` item but finds
+#     no `reason:` line for it; every shipped resolver-lock entry carries both
+#     reason and rung (§5/D53), so it fails loudly. This is a resolver-lock SHAPE
+#     rejection on the blocklist; the Go scanner never reads baseline_pack entries,
+#     so the missing provenance is invisible to it.
+# Rust: MissingProvenance — parse_layer tolerates a blocklist entry with no reason
+#     (the field is optional to it); the rejection comes from the baseline-pack
+#     entry omitting `provenance_source_url` + `evidence` (§8.1 (e) / D74), a cause
+#     the Go side cannot see. The two causes are INDEPENDENT: the Go cause is the
+#     missing-reason on the BLOCKLIST, the Rust cause is the missing provenance on
+#     a BASELINE-PACK entry — different sections, different schemas.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+baseline_pack:
+  entries:
+    - fqdn: api.example
+      family: core
+      ports: [443]
+blocklist:
+  - domain: dns.example
+    rung: block+log
+passthrough: []

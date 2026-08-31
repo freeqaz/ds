@@ -1,0 +1,6 @@
+Comparing image A (/var/lib/ds/base/m0-base.raw) with image B (/var/lib/ds/sessions/01HEXSESS/overlay.qcow2)
++ /home/ds/work/agent-notes.md
++ /home/ds/work/build/out.bin	100644 4096
+= /home/ds/.bash_history
+= /etc/hosts	100644 220
+- /home/ds/work/scratch.tmp

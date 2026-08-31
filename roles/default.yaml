@@ -1,0 +1,30 @@
+# role: default — the explicit no-op bundle (strawman; doc 18 §5).
+# Exists so "no role selected" and "default role" are the same recorded, auditable
+# fact: a create without role_ref records default@<current> (doc 18 §7).
+# Adds nothing; the session is exactly what the env spec + org policy + ordinary
+# grant envelope produce today.
+schema_version: role/v0
+name: default
+version: "2026.06.11-v1"
+description: >
+  Baseline session role. No additional tool layers, no skills, no policy delta,
+  no grant narrowing, no runtime overlay.
+
+image:
+  layers: []                      # env-spec-resolved image only
+
+skills:
+  install: []
+
+policy:
+  posture: standard               # = the org default; carries no delta
+  pack_families: {}
+  allowlist: []
+  guardrails: []
+
+credentials:
+  scope_template: null            # null = no narrowing: the full doc 16 §5.1 env-spec ×
+                                  #   services[] envelope applies unchanged
+
+runtime:
+  entrypoint_config_overlay_ref: null

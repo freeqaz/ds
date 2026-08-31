@@ -1,0 +1,128 @@
+// The control-plane PolicyService — the policy_log append/watch/grant surface
+// the orchestrator serves (doc 15 §5.3).
+//
+// The policy_log IS the audit trail (D36): AppendPolicy records the actor, the
+// bigserial seq is THE single policy version namespace end to end (D72; doc 13
+// §1 rule 3), and the composed snapshot is what WatchPolicies streams to the ONE
+// per-host subscriber (D72). [OSS] public contract; M0 freeze package (FREEZE.md
+// `dreamserpent.orchestrator.v1` row).
+//
+// OWNERSHIP MARK (doc 15 §5.3 "except as marked"): the PolicySnapshot message is
+// boundary.v1-OWNED and frozen at Stage 0 (boundary.v1 policy_stream.proto; doc
+// 09 §8) — WatchPolicies here IMPORTS it, never re-declares it. The POL-1 schema
+// fields live in ds-contracts (doc 13 §3): the composed PolicySnapshot carries
+// the composed document; layer schemas are not in this package. A `policy/v1`
+// package is forbidden (proto/README — the snapshot/stream messages belong to
+// boundary.v1).
+syntax = "proto3";
+
+package dreamserpent.orchestrator.v1;
+
+// PolicySnapshot is the composed-document snapshot (seq, content_hash, document)
+// — owned by dreamserpent.boundary.v1 (policy_stream.proto; D36/D72), imported,
+// never re-declared. WatchPolicies streams it to the one per-host subscriber.
+import "dreamserpent/boundary/v1/policy_stream.proto";
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/orchestrator/v1;orchestratorv1";
+
+// PolicyService is the orchestrator's policy_log surface (doc 15 §5.3, D36). Each
+// RPC takes a `<Verb>Request` and returns a `<Verb>Response` per buf STANDARD;
+// AppendPolicy and ApproveAsk both surface a PolicyLogRow, so each wraps it, and
+// WatchPolicies wraps the imported boundary.v1.PolicySnapshot (the boundary.v1
+// WatchPoliciesResponse precedent — additive without a v2).
+service PolicyService {
+  // AppendPolicy appends an authored policy row; the ACTOR is recorded — the log
+  // IS the audit trail (D36). Returns the appended PolicyLogRow with its assigned
+  // bigserial seq (THE single policy version namespace, D72).
+  rpc AppendPolicy(AppendPolicyRequest) returns (AppendPolicyResponse);
+
+  // WatchPolicies streams composed snapshots from `from_seq` (D36 catch-up):
+  // idempotent, deny-wins, EXACTLY ONE subscriber per host = the host agent
+  // (D72). Snapshot identity is (seq, content_hash, composed policy); JetStream
+  // is the pre-named substrate swap (D36, fired on the ~500-host budget miss or
+  // a policy-event-rate spike) BEHIND this contract. The frame carries the
+  // boundary.v1.PolicySnapshot.
+  rpc WatchPolicies(WatchPoliciesRequest) returns (stream WatchPoliciesResponse);
+
+  // ApproveAsk appends a §4.3 ask-grant row: TTL'd, session-scoped (POL-5 — no
+  // second response contract; the human's choice becomes a grant on the policy
+  // stream, never a second proxy-side response). Returns the appended
+  // PolicyLogRow.
+  rpc ApproveAsk(ApproveAskRequest) returns (ApproveAskResponse);
+}
+
+// PolicyLogRow is one appended policy_log row (doc 15 §5.3, D36). The row is the
+// audit unit: `seq` is the assigned bigserial (THE single policy version
+// namespace, D72); `actor` is who appended it (the audit-trail attribution);
+// `content_hash` is over the row's composed contribution. The composed-document
+// snapshot consumers apply is the boundary.v1.PolicySnapshot WatchPolicies
+// streams — this row is the WRITE record, not the composed read view.
+message PolicyLogRow {
+  uint64 seq = 1;                      // assigned bigserial — THE single policy version (D72)
+  string actor = 2;                    // who appended (audit-trail attribution, D36)
+  uint64 appended_at = 3;             // unix seconds
+  bytes content_hash = 4;             // over the row's contribution (the OQ3 canonicalizer)
+  PolicyRowKind kind = 5;             // org-edit | fleet-block | ask-grant
+}
+
+// PolicyRowKind classifies a policy_log row (doc 15 §5.3). The write volume — org
+// edits + fleet blocks + ask grants — is trivial single-table Postgres at the
+// ~500-host checkpoint the D36 swap trigger is budgeted against (sessions/04 §2).
+enum PolicyRowKind {
+  POLICY_ROW_KIND_UNSPECIFIED = 0;
+  POLICY_ROW_KIND_ORG_EDIT = 1;       // an org/repo/session policy authoring edit
+  POLICY_ROW_KIND_FLEET_BLOCK = 2;    // a fleet-block playbook entry (POL-4 rung default)
+  POLICY_ROW_KIND_ASK_GRANT = 3;      // a §4.3 ApproveAsk grant (TTL'd, session-scoped)
+}
+
+// AppendPolicyResponse wraps the appended PolicyLogRow (buf-STANDARD per-RPC
+// response, doc 15 §5.3).
+message AppendPolicyResponse {
+  PolicyLogRow row = 1;
+}
+
+// WatchPoliciesResponse is one streamed policy frame (doc 15 §5.3): it carries
+// exactly one boundary.v1.PolicySnapshot (the composed (seq, content_hash,
+// document) identity, D36/D72), imported and never re-declared. The buf-STANDARD
+// per-RPC stream wrapper keeps the frame additive-extensible without a v2 — the
+// boundary.v1 PolicyStreamService.WatchPolicies wraps its snapshot the same way.
+message WatchPoliciesResponse {
+  dreamserpent.boundary.v1.PolicySnapshot snapshot = 1;
+}
+
+// ApproveAskResponse wraps the appended ask-grant PolicyLogRow (buf-STANDARD
+// per-RPC response, doc 15 §5.3, POL-5).
+message ApproveAskResponse {
+  PolicyLogRow row = 1;
+}
+
+// AppendPolicyRequest carries an authored policy edit (doc 15 §5.3, D36). The
+// `document` is the layer contribution (POL-1 schema lives in ds-contracts, doc
+// 13 §3 — opaque here); composition into the deny-wins snapshot is control-plane
+// work the orchestrator performs, never carried as raw layers to the consumer.
+message AppendPolicyRequest {
+  string actor = 1;                    // recorded as the row actor (D36 audit trail)
+  string scope = 2;                    // org / repo / session scope key the layer applies at
+  bytes document = 3;                  // the policy layer contribution (POL-1, ds-contracts; opaque)
+}
+
+// WatchPoliciesRequest opens the per-host subscription and carries the replay
+// cursor (doc 15 §5.3, D36/D72). On (re)subscribe the host agent passes its last
+// persisted applied seq so the stream catches up from there; from_seq = 0
+// requests the current snapshot from the start. EXACTLY ONE subscriber per host.
+message WatchPoliciesRequest {
+  uint64 from_seq = 1;
+  string host_id = 2;                  // the one subscriber's host identity (D72)
+}
+
+// ApproveAskRequest appends a §4.3 ask-grant (doc 15 §5.3, POL-5). The grant is
+// TTL'd and session-scoped; it becomes a policy-stream artifact (POL-5: no second
+// response contract — the agent speaks attach.v1 and the grant rides the policy
+// stream, never a second proxy-side response).
+message ApproveAskRequest {
+  string actor = 1;                    // who approved (audit attribution)
+  string session_uuid = 2;            // the session the grant scopes to
+  string tool_use_id = 3;             // the attach.v1 ask correlation key the grant answers
+  string grant_scope = 4;             // what the grant permits (resolves to a POL-1 contribution)
+  uint64 ttl_seconds = 5;             // grant lifetime (TTL'd; POL-5)
+}

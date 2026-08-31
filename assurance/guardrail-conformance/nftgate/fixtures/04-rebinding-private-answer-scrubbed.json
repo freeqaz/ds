@@ -1,0 +1,8 @@
+{
+  "row": "dns-rebinding-fails",
+  "kind": "approved-name-re-resolves",
+  "domain": "api.allowed.example",
+  "dst_ip": "10.0.0.5",
+  "want": "scrub-no-silent-widen",
+  "why": "rebinding: an approved name re-resolves to a private RFC1918 address; DNS-4 rule 2 scrubs it (never inserted), and re-admission (rule 3) never silently widens the set off a stale answer (DNS-4 + NFT-3)"
+}

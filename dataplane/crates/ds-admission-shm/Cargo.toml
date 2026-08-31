@@ -1,0 +1,21 @@
+[package]
+name = "ds-admission-shm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The frozen DNS-2b admission contract (D67/D68): this crate is a STORAGE BODY
+# behind `AdmissionMap`/`ReverseIndex`, never a contract change. ds-contracts is
+# stdlib-only and family-agnostic (no hickory/pingora type crosses it, D40/D67).
+ds-contracts = { path = "../ds-contracts" }
+# The ONLY non-workspace dep (D131 / dataplane no-vendor policy): POSIX shm_open /
+# ftruncate / mmap / munmap for the survivable named segment and the anonymous
+# MAP_SHARED test/bench backing. libc 0.2 is already in the locked set.
+libc = "0.2"
+# Byte-layout refactor tooling (D131 storage-body refactor): zerocopy derives for the
+# cross-process `#[repr(C)]` PODs, memmap2 for the survivable mapping. Both already in
+# the locked set; this crate is a storage BODY, no contract/API change.
+zerocopy = { version = "0.8", features = ["derive"] }
+memmap2 = "0.9"

@@ -1,0 +1,55 @@
+{
+  "kind": "connect-npm-install",
+  "why": "doc 06 §2.2 row 2 (npm via CONNECT): an `npm install` over the EXPLICIT path is INDISTINGUISHABLE from a vanilla forward proxy. This golden pins the CONNECT preamble (CONNECT registry.npmjs.org:443 -\u003e 200) + the metadata GET and tarball GET SHAPE (headers byte-identical, body/tarball by digest, never payload bytes) so a regression in the TLS-2 opaque CONNECT tunnel OR the DS_TLS3_LIVE inspected path is caught by byte-identity replay.",
+  "sni": "registry.npmjs.org",
+  "connect": {
+    "authority": "registry.npmjs.org:443",
+    "request_line": "CONNECT registry.npmjs.org:443 HTTP/1.1",
+    "response_status": 200,
+    "response_reason": "Connection established"
+  },
+  "metadata": {
+    "request": {
+      "method": "GET",
+      "path": "/left-pad",
+      "headers": [
+        "accept: application/json",
+        "host: registry.npmjs.org",
+        "user-agent: npm/10.x"
+      ],
+      "body_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_len": 0
+    },
+    "response": {
+      "headers": [
+        "content-type: application/json",
+        "server: ds-tlsproxy-conformance-origin"
+      ],
+      "status": 200,
+      "body_digest": "sha256:04d2f2d0acc583b80e84d847fbcdd63cdcdd806238cf66a2d3e8f7a860effc5f",
+      "body_len": 154
+    }
+  },
+  "tarball": {
+    "request": {
+      "method": "GET",
+      "path": "/left-pad/-/left-pad-1.3.0.tgz",
+      "headers": [
+        "accept: application/octet-stream",
+        "host: registry.npmjs.org",
+        "user-agent: npm/10.x"
+      ],
+      "body_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_len": 0
+    },
+    "response": {
+      "headers": [
+        "content-type: application/octet-stream",
+        "server: ds-tlsproxy-conformance-origin"
+      ],
+      "status": 200,
+      "body_digest": "sha256:bb5a5a827943563c1f362ed670755ffd2381b9cd0ee72d6e15756ebde4d9d12e",
+      "body_len": 35328
+    }
+  }
+}

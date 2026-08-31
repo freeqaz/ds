@@ -1,0 +1,204 @@
+// Identity-plane LOG-1 minimal event set (doc 16 §9).
+//
+// The Stage-0 minimal set: IdentityMinted, ValidationResult,
+// GrantIssued/Denied/Evicted, DigestRegistered/Revoked (fleet),
+// AskIssued/Approved/Denied (+approver identity), CAMinted. Additive later
+// (doc 16 §9 — minimal set now, additive events post-flip).
+//
+// JOIN KEY: every event carries the canonical `dreamserpent.boundary.v1.SessionRef`
+// (doc 16 §9; doc 14 §2 / §4: the orchestrator session record is the authority) —
+// imported via session_ref.proto at the Stage-0 freeze-PR session-ref
+// unification, never redefined here.
+//
+// FINGERPRINT-ONLY DISCIPLINE (doc 16 §9; doc 14 §2): a matched/used credential,
+// a token, or CA key material appears in NO event field — only fingerprints.
+// Credential bytes, token bytes, and private keys never enter any LOG-1
+// event/log/spool/error path. Consumed by ds-flowlog, LOG-5 dashboards, audit.
+//
+// Stage-0 freeze seam (doc 16 §9, FREEZE.md `dreamserpent.identity.v1` row).
+syntax = "proto3";
+
+package dreamserpent.identity.v1;
+
+// The canonical SessionRef (D66/D44) — owned by dreamserpent.boundary.v1,
+// imported per the freeze-PR session-ref unification (doc 14 §2/§4).
+import "dreamserpent/boundary/v1/session_ref.proto";
+// ValidateVerdict (the D22 ALLOW | DENY verdict enum) is shared from the
+// validation seam so `ValidationResult` echoes the exact verdict surface
+// (doc 16 §4 / §9). Same package, separate file — buf requires the explicit
+// import.
+import "dreamserpent/identity/v1/validate.proto";
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/identity/v1;identityv1";
+
+// ConsentClass is the D60 consent-class tag (metadata | session | workload).
+//
+// D60 ratifies per-repo consent classes for design-partner content
+// (introspection-by-consent, doc 08 §3). Round-4 packet item 5 (ratified
+// 2026-06-12) closed doc 16 OQ5: the ask/approval events carry a D60
+// consent-class field TAGGED AT STAGE 0 so retention policy binds later WITHOUT
+// a proto change. TAG/RESERVE ONLY at Stage 0 — no population behavior is frozen
+// (doc 16 §9 / OQ5). Mirrors the boundary.v1 reservation on `AskUserRequest`
+// (doc 14 §2b) — the ask payload boundary tags is what these identity-plane
+// events tag.
+enum ConsentClass {
+  CONSENT_CLASS_UNSPECIFIED = 0;
+  CONSENT_CLASS_METADATA = 1;
+  CONSENT_CLASS_SESSION = 2;
+  CONSENT_CLASS_WORKLOAD = 3;
+}
+
+// IdentityMinted records a workload-identity mint (hierarchy 1; doc 16 §9, §3.1).
+message IdentityMinted {
+  // Join key — the canonical boundary.v1.SessionRef (imported; see file header).
+  dreamserpent.boundary.v1.SessionRef session_ref = 1;
+
+  // Fingerprint of the minted workload-identity credential (cert/JWT) — never
+  // the credential itself (fingerprint-only, doc 16 §9).
+  string identity_fingerprint = 2;
+
+  // P-T1 token-lineage reservation (doc 19 P-T1; ratified D104). RESERVE field
+  // numbers for the token-lineage block — the chain of block/caveat fingerprints
+  // (or revocation IDs), the parent_session hops, and attenuation depth — so
+  // doc 19 retention/lineage binds later WITHOUT a v2-package event. Mandatory
+  // even though doc 19's seed rows were unratified at reservation time; the
+  // freeze is one-shot. Fingerprint-only: token bytes never appear (doc 19 §9).
+  // RESERVE ONLY — no population behavior. Numbers 16-19 hold the lineage block.
+  reserved 16, 17, 18, 19;
+}
+
+// ValidationResult records one D22 `Validate` verdict (doc 16 §9; §11.1 step 3).
+message ValidationResult {
+  // Join key — the canonical boundary.v1.SessionRef (imported; see file header).
+  dreamserpent.boundary.v1.SessionRef session_ref = 1;
+
+  // The registry service key the validation targeted (doc 16 §11.1 step 3).
+  string service_id = 2;
+
+  // The ALLOW | DENY outcome (shares validate.proto's verdict enum).
+  ValidateVerdict verdict = 3;
+
+  // Machine-readable denial reason, populated only on DENY (D77; doc 16 §4).
+  string machine_readable_reason = 4;
+
+  // Fingerprint of the presented credential — never the credential, never the
+  // token bytes (fingerprint-only, doc 16 §9 / doc 19 §9).
+  string presented_credential_fingerprint = 5;
+
+  // P-T1 token-lineage reservation (doc 19 P-T1; ratified D104). `ValidationResult`
+  // SHOULD carry the token lineage — the chain of block/caveat fingerprints (or
+  // revocation IDs) + the parent_session hops + attenuation depth (doc 19 §9).
+  // RESERVE field numbers now so the lineage binds later WITHOUT a v2-package
+  // event; mandatory even while doc 19 awaited ratification (one-shot freeze).
+  // Fingerprint-only: token bytes never appear. RESERVE ONLY — no population
+  // behavior. Numbers 16-19 hold the lineage block.
+  reserved 16, 17, 18, 19;
+}
+
+// GrantIssued records a grant binding identity x service x scope x TTL
+// (doc 16 §5.1, §9).
+message GrantIssued {
+  dreamserpent.boundary.v1.SessionRef session_ref = 1;
+  string service_id = 2;
+  // Opaque handle to the issued grant (doc 16 §4 `grant_ref`) — never the
+  // credential behind it.
+  string grant_ref = 3;
+  int64 expiry_unix_seconds = 4;
+}
+
+// GrantDenied records a denied grant request (doc 16 §9).
+message GrantDenied {
+  dreamserpent.boundary.v1.SessionRef session_ref = 1;
+  string service_id = 2;
+  // Machine-readable denial reason (D77 in-band reason; doc 16 §4).
+  string machine_readable_reason = 3;
+}
+
+// GrantEvicted records a grant evicted on suspend/kill/admin-revoke
+// (doc 16 §5.4, §9).
+message GrantEvicted {
+  dreamserpent.boundary.v1.SessionRef session_ref = 1;
+  string service_id = 2;
+  string grant_ref = 3;
+}
+
+// DigestRegistered / DigestRevoked are the §9-mandated LOG-1 AUDIT EVENT names
+// (doc 16 §9: "DigestRegistered/Revoked (fleet)"). They are past-tense event
+// records carrying a SessionRef join key + a fingerprint — NOT the digest-feed's
+// operations. The digest FEED itself (the doc 14 §7 entry shape + publish /
+// revoke / ack) is a SEPARATE file, `digest_feed.proto`, owned by a sibling unit
+// in this SAME package (doc 16 §6.6); that file uses publish/revoke operation
+// names, never these event names, so the package compiles when both files sit
+// side by side — no identifier collision.
+//
+// DigestRegistered records a FLEET-scope digest registration (doc 16 §6.2, §9).
+// Session-scope digests are session-lifecycle data and ride their own
+// non-event cadence; the identity-plane event covers the fleet (policy-artifact)
+// scope.
+message DigestRegistered {
+  dreamserpent.boundary.v1.SessionRef session_ref = 1;
+  // Fingerprint / key_id of the registered digest — never the plaintext secret
+  // and never the digest's covered value (fingerprint-only, doc 14 §7 /
+  // doc 16 §9: plaintext never crosses).
+  string digest_key_id = 2;
+}
+
+// DigestRevoked records a FLEET-scope digest revocation (doc 16 §6.2, §9).
+message DigestRevoked {
+  dreamserpent.boundary.v1.SessionRef session_ref = 1;
+  string digest_key_id = 2;
+}
+
+// AskIssued records an ask-a-human routing event (D78; doc 16 §8.2, §9).
+message AskIssued {
+  dreamserpent.boundary.v1.SessionRef session_ref = 1;
+  // The resource kind / name the ask is about, per POL-3 matched rule
+  // (doc 16 §8.2). Metadata only.
+  string resource_kind = 2;
+  string resource_name = 3;
+
+  // D60 consent-class tag (doc 16 §9 / OQ5; round-4 packet item 5, D60). TAGGED
+  // AT STAGE 0 so retention binds later without a proto change. RESERVE/TAG ONLY
+  // — no population behavior frozen here. Mirrors boundary.v1 AskUserRequest's
+  // reserved D60 tag (doc 14 §2b).
+  ConsentClass consent_class = 4;
+}
+
+// AskApproved records an approval, carrying the approver identity
+// (doc 16 §8.2 "+approver", §9).
+message AskApproved {
+  dreamserpent.boundary.v1.SessionRef session_ref = 1;
+  // The approver's principal — default approver = the launching user; allow-always
+  // escalates to org-admin per D45 (doc 16 §8.2). IdP-subject handle, not a
+  // credential.
+  string approver_principal = 2;
+
+  // D60 consent-class tag (doc 16 §9 / OQ5; round-4 packet item 5, D60). TAGGED
+  // AT STAGE 0 so retention binds later without a proto change. RESERVE/TAG ONLY
+  // — no population behavior frozen. Mirrors boundary.v1 AskUserRequest (doc 14 §2b).
+  ConsentClass consent_class = 3;
+}
+
+// AskDenied records a denial, carrying the approver identity who denied
+// (doc 16 §8.2, §9). Underpins the session-scoped deny memo (D118, doc 16 §8.2).
+message AskDenied {
+  dreamserpent.boundary.v1.SessionRef session_ref = 1;
+  // The principal who denied (doc 16 §8.2). IdP-subject handle.
+  string approver_principal = 2;
+  // Machine-readable reason for fast-fail retries (D77; doc 16 §8.2).
+  string machine_readable_reason = 3;
+
+  // D60 consent-class tag (doc 16 §9 / OQ5; round-4 packet item 5, D60). TAGGED
+  // AT STAGE 0 so retention binds later without a proto change. RESERVE/TAG ONLY
+  // — no population behavior frozen. Mirrors boundary.v1 AskUserRequest (doc 14 §2b).
+  ConsentClass consent_class = 4;
+}
+
+// CAMinted records a per-session interception-CA mint (D17/D82; doc 16 §4, §9).
+message CAMinted {
+  dreamserpent.boundary.v1.SessionRef session_ref = 1;
+  // Fingerprint of the minted interception CA certificate — never the CA private
+  // key (fingerprint-only, doc 16 §9; the proxy-bound key never enters any
+  // event).
+  string ca_certificate_fingerprint = 2;
+}

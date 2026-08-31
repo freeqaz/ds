@@ -1,0 +1,266 @@
+// The grant-record contract — the typed `GrantSet` that `MintGrants` returns
+// (doc 16 §5.1 / §9; D111 additive promotion, D39, D52, D83, D98).
+//
+// A GRANT is a typed record — identity × service × scope × TTL (doc 16 §5.1
+// verbatim). It is issued at MINT TIME from the session's env spec (D7)
+// intersected with the org `services[]` registry: the registry defines
+// *capability* (which swaps exist), the env spec names which of those the
+// session asked for, and the grant binds the capability to one identity. The
+// grant decision is a DETERMINISTIC LOOKUP, never a policy evaluation — no
+// Cedar, no expression language in v0 (D52; doc 16 §5.1). The digest feed's
+// `ISSUED{service_id}` tag is DERIVED from the grant record — a digest's
+// intended service is a grant FACT (doc 16 §5.1 / §6, §11.1 step 7).
+//
+// PROVENANCE — this is the D111 ADDITIVE promotion of the grant record into the
+// already-FROZEN `dreamserpent.identity.v1` package (FREEZE.md identity.v1 row;
+// doc 16 §9; ratified D111 round-4 packet §3). It is NOT a new freeze and NOT a
+// break: the four Stage-0 seams froze 2026-06-12; the `MintGrants` shape pins in
+// the M0 window as a buf-safe service/RPC + message addition to the flipped
+// package (doc 16 §9 Mint-RPC row; the `MintGrants(...) returns (...)` reserved
+// comment in ca_mint.proto is promoted to the real RPC in the same change). A
+// field missed at promotion is a v2-package event, not a patch (proto/FREEZE.md
+// one-shot change control) — so the field-number ranges below are reserved
+// generously for forward growth.
+//
+// FAITHFUL MIRROR — every message/field here mirrors the tested internal Go
+// model in `identity/mint/grants.go` (the §5.1 shape, exercised by
+// `grants_test.go`); a later Go repoint onto these generated types is mechanical
+// (field names + semantics match). That repoint is a SEPARATE follow-up; these
+// generated types are unused until then (the M0 fakes-first pattern, doc 05 OQ3).
+//
+// OUT OF SCOPE here (a SEPARATE later rider, NOT claimed by this promotion): the
+// grant-FETCH protocol (swap executor → Identity grant service fronting the key
+// store) and the D55 Vault integration land WITH the M1 credential-swap design
+// (doc 16 §9 "Grant-fetch protocol (D39)" / "Fleet digest registration API (D84)"
+// rows — M1 window, alongside the D55 spec). This file carries only the grant
+// RECORD that `MintGrants` issues; `GrantRef` here is the opaque, secret-free
+// handle that later fetch keys on, never the credential.
+
+syntax = "proto3";
+
+package dreamserpent.identity.v1;
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/identity/v1;identityv1";
+
+// GrantScope is the doc 16 §5.1 scope axis of a grant. v0 carries the two scopes
+// the digest feed already classifies (doc 14 §7 / doc 16 §6.2): SESSION-scoped
+// grants are session-lifecycle data (the D72-exempt class, like the D17 CA mint);
+// FLEET-scoped grants are policy artifacts riding the fleet policy cadence
+// (doc 16 §6.2). The grant model is the source of the `cred_class` scope on the
+// digest feed (doc 16 §6), so the axis is named here even though M0 issuance is
+// always SESSION-scoped. Mirrors `mint.GrantScope` (grants.go): the enum values
+// render to the digest-feed scope tokens "SESSION"/"FLEET" (doc 14 §7 scope).
+enum GrantScope {
+  // The proto3 zero value. The Go model's default scope is SESSION
+  // (`mint.ScopeSession`, iota 0); _UNSPECIFIED is the buf-STANDARD zero (a
+  // missing/never-set scope must be distinguishable from a deliberate SESSION),
+  // so callers MUST set SESSION explicitly rather than relying on the zero
+  // meaning session. Treating UNSPECIFIED as SESSION is a Validate-internal
+  // policy, never a wire default.
+  GRANT_SCOPE_UNSPECIFIED = 0;
+  // SESSION: the grant lives and dies with the session (the D17 CA / D22 grant
+  // lifecycle class, doc 16 §6.2). The M0 issuance path mints only this scope.
+  GRANT_SCOPE_SESSION = 1;
+  // FLEET: the grant's digest rides the fleet policy cadence (doc 16 §6.2). No M0
+  // issuance path mints fleet grants; the value is carried so the digest-tag
+  // derivation (doc 16 §6) can express it without a model change.
+  GRANT_SCOPE_FLEET = 2;
+
+  // Reserved for forward scope growth (doc 16 §5.1 M4 horizon: grant conditions
+  // become relational). A new scope is an additive enum value, never a v2.
+  reserved 3 to 15;
+}
+
+// Grant is one typed grant record — the doc 16 §5.1 shape verbatim: identity ×
+// service × scope × TTL. It is the deterministic binding the swap executor
+// resolves at Validate (doc 16 §4) and the fact the `ISSUED{service_id}` digest
+// tag derives from (doc 16 §6). No expression language anywhere on the record
+// (D52): every field is a concrete value, the decision a map read. Mirrors
+// `mint.Grant` (grants.go) field-for-field so a later Go repoint is mechanical.
+message Grant {
+  // The session identity the grant binds the capability TO — the
+  // SPIFFE-compatible workload identity name (doc 16 §3.1,
+  // `spiffe://<org>/session/...`). The "identity" axis of the §5.1 tuple.
+  // Mirrors `mint.Grant.Identity`.
+  string identity = 1;
+
+  // The `services[]` registry key the grant authorizes (the "service" axis). It
+  // is what `Validate(presented, session_ref, service_id)` keys the grant lookup
+  // on (doc 16 §4) and what the `ISSUED{service_id}` digest tag names (doc 16
+  // §6). Mirrors `mint.Grant.ServiceID`.
+  string service_id = 2;
+
+  // The doc 16 §5.1 scope axis (SESSION default in the Go model; see GrantScope).
+  // Mirrors `mint.Grant.Scope`.
+  GrantScope scope = 3;
+
+  // IssuedAt / Expiry bound the grant's TTL (the "TTL" axis). TTL ≤ session
+  // lifetime (D39 cache ceiling — the grant never outlives its session); Expiry
+  // is checked at Validate freshness (doc 16 §4). Wall-clock UNIX seconds,
+  // matching ca_mint.proto's `expiry_unix_seconds`; a freeze-window refinement to
+  // google.protobuf.Timestamp would be additive and wire-compatible. Mirror of
+  // `mint.Grant.IssuedAt` / `mint.Grant.Expiry`.
+  int64 issued_at_unix_seconds = 4;
+  int64 expiry_unix_seconds = 5;
+
+  // The opaque handle the swap executor presents to the grant service to FETCH
+  // the real credential (doc 16 §9 grant-fetch row). It NEVER carries secret
+  // material — only a reference — and is deterministic from identity × service so
+  // a re-issue for the same binding is stable (the §9 fetch caches predictably).
+  // Wire shape mirrors `mint.FormatGrantRef`: "grant:<session_uuid>:<service_id>"
+  // (the cross-module GrantRef contract pinned by the committed golden fixture,
+  // grants.go). The grant-FETCH protocol that consumes this handle is the
+  // SEPARATE M1/D55 rider (file header); this field is only the key.
+  string grant_ref = 6;
+
+  // The `cred_class` digest tag DERIVED from this grant (doc 16 §5.1 / §6,
+  // §11.1 step 7): `ISSUED{service_id}`. A digest's intended service is a grant
+  // FACT — the tag is COMPUTED FROM the grant record, never asserted
+  // independently — so this field is the single derived value the producer reads
+  // (the structural form of the §11.1 step-7 invariant, "the tag is derived from
+  // the grant record"). It is a function of service_id alone; mirrors
+  // `mint.IssuedDigestTag` = "ISSUED{" + service_id + "}". Carried on the record
+  // so the digest producer never re-derives it independently of the grant.
+  string cred_class_digest_tag = 7;
+
+  // Reserved for forward grant-record growth (doc 16 §5.1 M4 relational
+  // conditions; a per-grant attenuated-scope handle when MintGrantsScoped's
+  // role-template path promotes, roletemplate_consume.go). Additive fields only.
+  reserved 8 to 31;
+}
+
+// ServiceRegistryEntry is one row of the org `services[]` registry (doc 16 §5.1 /
+// §7): it declares a *capability* — which swap exists and where the credential is
+// carried — independent of any identity. Grants bind these entries to an
+// identity; credential-class rules (doc 16 §7) express limits on top. Registry
+// content is POL-1 value ownership (doc 16 §9), supplied by the org, not minted
+// here. Mirrors `mint.ServiceRegistryEntry` (grants.go).
+message ServiceRegistryEntry {
+  // The registry key (e.g. "github"). Grants and the digest tag reference it.
+  // Mirrors `mint.ServiceRegistryEntry.ServiceID`.
+  string service_id = 1;
+
+  // The hosts this service's credential is expected on — the destination-scope
+  // the `ISSUED{service_id}` digest enforces (doc 16 §11.1 wrong-destination
+  // block). Informational on the grant model; the boundary enforces. Mirrors
+  // `mint.ServiceRegistryEntry.Destinations`.
+  repeated string destinations = 2;
+
+  // Where the swap substitutes the credential (the frozen generic
+  // Authorization-header seam, D83 — "Authorization" by default, doc 13 §3; free
+  // per doc 16 §12 beyond the header default). Mirrors
+  // `mint.ServiceRegistryEntry.CredentialLocation`.
+  string credential_location = 3;
+
+  // The registry-default grant lifetime when the env spec names no override,
+  // bounded by the session lifetime at issuance (TTL ≤ session, D39). Seconds
+  // (the Go model's time.Duration rendered as a whole-second count); a
+  // sub-second refinement would be additive. Mirrors
+  // `mint.ServiceRegistryEntry.DefaultTTL`.
+  int64 default_ttl_seconds = 4;
+
+  // Reserved for forward registry-entry growth (e.g. doc 16 §7 credential-class
+  // hooks, per-service variant-tag policy, doc 14 §7). Additive fields only.
+  reserved 5 to 31;
+}
+
+// EnvSpec is the session's env config (D7) — the per-session request for which
+// registry capabilities this session should be granted. The env spec NAMES
+// services; the registry DEFINES them; issuance is the deterministic intersection
+// (doc 16 §5.1: "issued at mint time from the session's env spec + the org
+// services[] registry"). Mirrors `mint.EnvSpec` (grants.go).
+message EnvSpec {
+  // The service_ids this session requests. A request for a service NOT in the
+  // registry confers no grant (fail-closed: absence is denial, doc 16 §11.2
+  // unmapped-groups discipline applied to capabilities). Mirrors
+  // `mint.EnvSpec.Services`.
+  repeated string services = 1;
+
+  // Optionally shortens a service's grant TTL below the registry default (never
+  // lengthens past the session lifetime). Keyed by service_id; seconds. Mirrors
+  // `mint.EnvSpec.TTLOverrides`. (proto3 maps cannot be `reserved`-fenced;
+  // forward TTL-shaping growth rides new top-level fields under the reservation
+  // below.)
+  map<string, int64> ttl_override_seconds = 2;
+
+  // Reserved for forward env-spec growth (the env-spec schema has no owning doc
+  // yet, proto/README.md "Unowned seams" / doc 15 OQ10 — this message freezes
+  // only the reference shape the grant model reads). Additive fields only.
+  reserved 3 to 31;
+}
+
+// MintGrantsRequest is the MintGrants input (doc 16 §5.1): a session and its env
+// spec. The org `services[]` registry is shim-wide (it is installed on the mint
+// service, not passed per request — `mint.WithServiceRegistry`), so it is NOT a
+// request field; the registry entry shape is published here (ServiceRegistryEntry)
+// only so consumers can model it. Mirrors `mint.MintGrantsRequest` (grants.go).
+message MintGrantsRequest {
+  // The session whose grants are being minted — the identity-plane join key. Per
+  // the §4 / boundary.v1 convention the session is referenced by the SHARED
+  // canonical message; the Go model carries the bare session UUID
+  // (`mint.MintGrantsRequest.SessionUUID`). Carried here as a string to mirror
+  // the Go model exactly (a later additive `SessionRef session_ref` field, as on
+  // MintInterceptionCARequest, can join under the reservation below without a
+  // break). The session must already have a minted workload identity
+  // (MintWorkloadIdentity ran), so the grant's identity axis is the SPIFFE name
+  // and the TTL can clamp to the session expiry (grants.go IssueGrants contract).
+  string session_uuid = 1;
+
+  // The session's env spec (D7) — which registry capabilities this session
+  // requests. Mirrors `mint.MintGrantsRequest.Env`.
+  EnvSpec env = 2;
+
+  // Reserved for forward request growth (e.g. an additive
+  // `dreamserpent.boundary.v1.SessionRef session_ref`, a role_ref for the
+  // MintGrantsScoped role-template path, roletemplate_consume.go). Additive only.
+  reserved 3 to 15;
+}
+
+// PlaceholderToken pairs an issued grant with the opaque per-service token the
+// agent presents for it (doc 16 §5.1, brief gap 9). The token is NOT a
+// credential — it carries NO secret — it is the presentation the swap executor
+// hands to Validate so the grant lookup runs (and which validates ONLY as the
+// opaque grant-presentation it is: never as workload identity, never as
+// interception material, grants.go validatePlaceholder). Mirrors
+// `mint.PlaceholderToken` (grants.go).
+message PlaceholderToken {
+  // The service the token is minted for. A placeholder for "github" never
+  // validates for "npm" (grants.go). Mirrors `mint.PlaceholderToken.ServiceID`.
+  string service_id = 1;
+
+  // The grant this placeholder presents for. Mirrors
+  // `mint.PlaceholderToken.Grant`.
+  Grant grant = 2;
+
+  // The opaque presented value (the Go model: a domain-separated HMAC behind a
+  // literal `dsph1.` prefix — structurally NOT a JWS, so it can never validate as
+  // workload identity, grants.go mintPlaceholder). Bytes: opaque bearer material,
+  // never parsed by consumers. Mirrors `mint.PlaceholderToken.Token`.
+  bytes token = 3;
+
+  // Reserved for forward placeholder growth (e.g. an explicit placeholder expiry
+  // separate from the grant's, doc 16 §5.1). Additive fields only.
+  reserved 4 to 15;
+}
+
+// GrantSet is the MintGrants RESPONSE (doc 16 §5.1 "GrantSet": the set of typed
+// grant records `MintGrants` issues) — the issued grants plus the per-service
+// placeholder tokens the agent holds. This is the message the promoted
+// `rpc MintGrants(MintGrantsRequest) returns (GrantSet)` on IdentityMintService
+// returns (ca_mint.proto; the reserved `// GrantSet: typed records` comment made
+// real). Mirrors `mint.GrantSet` (grants.go).
+message GrantSet {
+  // The issued grant records — the deterministic intersection of the env spec
+  // and the org registry (grants.go IssueGrants). Empty when no requested service
+  // has a registry capability (fail-closed: no capability ⇒ no grant). Mirrors
+  // `mint.GrantSet.Grants`.
+  repeated Grant grants = 1;
+
+  // The per-service placeholder tokens the agent holds — one per issued grant
+  // (grants.go MintGrants). Mirrors `mint.GrantSet.Placeholders`.
+  repeated PlaceholderToken placeholders = 2;
+
+  // Reserved for forward response growth (e.g. a derived-digest-tag echo, or a
+  // batch issuance status). Additive fields only.
+  reserved 3 to 15;
+}

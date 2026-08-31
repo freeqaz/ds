@@ -1,0 +1,102 @@
+# prebake.config.example.yaml — per-repo pre-bake opt-in config (doc 03 §6, D12).
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# WHAT THIS IS
+# ------------
+# The CI-to-golden-image PRE-BAKE path of doc 03 §6: CI snapshots node_modules +
+# build artifacts into the golden VM image PER REPO/BRANCH, so a session created
+# from that branch boots with dependencies already on disk — no network
+# stampede, no cold build (doc 05 §5 M2 "instant start"). prebake.sh reads this
+# file to decide, per (repo, branch), whether a bake is invoked at all.
+#
+# DEFAULT OFF (D12 / doc 03 §6)
+# -----------------------------
+# Pre-seeding is OPTIONAL and per-repo configurable. The platform's v0
+# environments stay DYNAMIC (no golden-image requirement, D12); pre-bake is the
+# M2 optimization, not the default. So this config is opt-in by BOTH layers:
+#
+#   1. `enabled: false` at the top level is the global kill-switch (default).
+#      With it false, NO repo is ever baked, whatever the repos[] list says.
+#   2. A repo is baked ONLY if it appears in repos[] AND carries `prebake: true`.
+#      A repo absent from repos[] — or present with `prebake: false`/omitted —
+#      is left UNTOUCHED. "Most users don't want every repo baked into every
+#      box" (doc 03 §6); an org standardizing on a monorepo opts that one repo in.
+#
+# prebake.sh --dry-run prints the PLAN it would execute for a configured
+# (repo, branch); for an unconfigured repo it prints "skip (not configured)" and
+# exits 0 without invoking any bake step. The actual qemu/libguestfs bake is
+# DS_GOLDEN_BAKE_LIVE-gated (see prebake.sh / README) and never fires in CI.
+
+# Global kill-switch. Default OFF: the whole pipeline is dynamic (D12) until an
+# operator deliberately flips this to true AND opts a repo in below.
+enabled: false
+
+# Defaults applied to every opted-in repo unless the repo overrides them.
+# These describe HOW a warmed overlay is produced; they bind nothing on their
+# own (a repo must still set `prebake: true`).
+defaults:
+  # The raw base golden image every per-repo overlay clones from (the D29
+  # raw-base + per-session-qcow2 stack; overlay-create.sh establishes it). The
+  # bake clones a throwaway overlay from this, warms it, and commits the result
+  # as the per-repo golden. Path is resolved on the operator host at bake time.
+  base_image: /var/lib/ds/golden/m0-base.raw
+
+  # Where committed per-repo golden images are written (one per repo+branch).
+  # The content-addressed image ID (images/golden/IMAGE-IDENTITY.md) is computed
+  # by the image pipeline; this is just the on-disk destination directory.
+  output_dir: /var/lib/ds/golden/prebaked
+
+  # ROTATION WINDOW (max age, hours) — the doc 03 §6 freshness SLA: a golden a
+  # session clones from is never older than this. nightly-rebuild.sh's rotation
+  # check (--check-rotation) flags a golden older than the window as STALE (it
+  # MUST be rolled before a new session clones it). OPTIONAL — when omitted the
+  # rotation check uses DS_GOLDEN_MAX_AGE_HOURS, else the built-in 24h (nightly
+  # cadence) default. Precedence, most specific wins:
+  #   per-branch override > per-repo max_age_hours > defaults.max_age_hours >
+  #   DS_GOLDEN_MAX_AGE_HOURS env > built-in 24h.
+  max_age_hours: 24
+
+  # The install/build commands run INSIDE the cloned overlay to warm it. These
+  # are the repo's own dependency-fetch + build steps — what makes node_modules
+  # land on disk and the build cache warm (doc 03 §6). The egress for these
+  # steps flows through the boundary's allow-set + the D41 package cache like any
+  # session; this config never embeds credentials (identity is minted per
+  # session, doc 16 — long-lived creds never enter the image).
+  warm_steps:
+    - npm ci
+    - npm run build
+
+# Per-repo opt-in list. A repo NOT in this list is never baked. Within the list,
+# only entries with `prebake: true` are baked; the rest are recorded but skipped.
+repos:
+  # OPTED IN — a monorepo an org standardizes on (the doc 03 §6 motivating case).
+  - repo: github.com/acme/monorepo
+    prebake: true
+    # Branches to pre-bake for this repo. Each (repo, branch) pair yields one
+    # warmed per-repo golden. Omit to default to ["main"].
+    branches:
+      - main
+      - release
+    # Optional per-repo rotation window (hours). Overrides defaults.max_age_hours
+    # for every branch of this repo unless a per-branch override below is tighter.
+    max_age_hours: 24
+    # Optional per-branch rotation-window overrides (hours), keyed by branch name.
+    # The MOST SPECIFIC window wins: a branch listed here overrides this repo's
+    # max_age_hours, which overrides defaults.max_age_hours. Here a release golden
+    # must be rolled at least twice as often as the repo default (a release branch
+    # is what live sessions clone most, so its freshness SLA is tighter).
+    branch_overrides:
+      release:
+        max_age_hours: 12
+    # Optional per-repo overrides of the defaults above.
+    warm_steps:
+      - pnpm install --frozen-lockfile
+      - pnpm -r build
+
+  # PRESENT BUT OPTED OUT — listed for visibility, never baked (`prebake: false`).
+  # Demonstrates that membership in repos[] is necessary but not sufficient.
+  - repo: github.com/acme/scratch
+    prebake: false
+    branches:
+      - main

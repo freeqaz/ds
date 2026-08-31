@@ -1,0 +1,71 @@
+[
+  {
+    "_README": "Example override for the `taskdb work` bucket heuristics. Copy this file to scripts/taskdb/work-buckets.json (drop the .example suffix), or point TASKDB_WORK_BUCKETS at it, to retune classification WITHOUT recompiling. This array reproduces the built-in defaultBucketRules verbatim; edit the `patterns` to taste. Keys beginning with `_` (like this one) are ignored by the Go loader (encoding/json drops unknown fields), so they are safe inline documentation. Rules are evaluated top-to-bottom, FIRST MATCH WINS (bookkeeping -> gated -> strategic -> docs -> else `substantive`); anything no rule matches is `substantive`. `scope` is `title` (matches the task title only) or `body` (matches title + body; the default when omitted). `patterns` are case-insensitive regex alternatives joined with `|`; an empty list disables that bucket. A malformed override is a loud error, never a silent fall-back to defaults.",
+    "bucket": "bookkeeping",
+    "scope": "title",
+    "patterns": [
+      "^\\s*re-scope files-overlap:"
+    ]
+  },
+  {
+    "bucket": "gated",
+    "scope": "body",
+    "patterns": [
+      "\\bDS_PG_DSN\\b",
+      "\\bDS_[A-Z0-9_]*_LIVE\\b",
+      "\\blive[- ]?pg\\b",
+      "\\blive[- ]?CI\\b",
+      "\\bCI run\\b",
+      "\\[human\\]",
+      "MANUAL OPERATOR",
+      "\\bproto[- ]?freeze",
+      "RoleCatalog proto",
+      "once\\s+NFT-?\\d",
+      "once\\s+.{0,40}\\blands\\b",
+      "pending\\s+.{0,50}(seed|policy[- ]?push|freeze)",
+      "requires\\s+.{0,50}\\blanded\\b",
+      "blocked:\\s*prot",
+      "DS_E2E_LIVE"
+    ]
+  },
+  {
+    "bucket": "strategic",
+    "scope": "body",
+    "patterns": [
+      "\\bbuild-vs-buy\\b",
+      "\\bratif",
+      "\\bM2-gated\\b",
+      "\\bevaluate\\b",
+      "\\bdecide the\\b",
+      "\\bdecide\\b\\s+the",
+      "coordinate\\s+.{0,40}\\bbefore\\b",
+      "\\bcounsel\\b",
+      "\\blegal\\b",
+      "\\badoption\\b",
+      "entity-structure",
+      "\\bobligation"
+    ]
+  },
+  {
+    "bucket": "docs",
+    "scope": "body",
+    "patterns": [
+      "\\bgofmt\\b",
+      "micro-?benchmark",
+      "allocs[- ]?gate",
+      "e2e pin",
+      "\\bcitation\\b",
+      "\\bnarrative\\b",
+      "docstring",
+      "comment-only",
+      "\\btypo\\b",
+      "wave-note",
+      "\\brephrase\\b",
+      "\\bannotate\\b",
+      "\\bREADME\\b",
+      "\\brunbook\\b",
+      "single-source",
+      "\\bre-cite\\b"
+    ]
+  }
+]

@@ -1,0 +1,3 @@
+Comparing image A (/var/lib/ds/base/m0-base.raw) with image B (/var/lib/ds/sessions/01HEXSESS/overlay.qcow2)
++ /home/ds/work/ok.md
++/home/ds/work/broken-no-space.md

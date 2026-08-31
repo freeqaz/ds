@@ -1,0 +1,98 @@
+// Dream Serpent — boundary.v1 suspend signal.
+//
+// One of the three non-LOG-1 Stage-0 boundary->orchestrator seams
+// (doc 14 §2b; counterparty ledger doc 15 §6). Owner = Boundary;
+// counterparty = Orchestrator (doc 15 §6); freeze deadline = Stage 0;
+// change control = buf-gated, additive-only post-freeze (the same regime
+// as the §2 LOG-1 checklist).
+//
+// The boundary emits this signal; the orchestrator acks and drives
+// Suspend(reason) on the hypervisor driver, owning the D46 escalation
+// clock (doc 15 §4.3, §6). It carries session, POL-3 provenance, the D77
+// reason taxonomy, and a dedup key (doc 15 §4.3).
+//
+// SCOPE NOTE: this file is the suspend SIGNAL only. The orchestrator ->
+// ds-tlsproxy pause/resume coordination seam (the D46 hold/buffer tiers)
+// is DELIBERATELY ABSENT and UNRESERVED — it is pointer-only and under
+// investigation in round 4 (doc 14 §1 "under investigation" row;
+// doc 15 §4.3 "Missing reverse direction" / OQ7). No field numbers are
+// reserved for it here.
+syntax = "proto3";
+
+package dreamserpent.boundary.v1;
+
+// SessionRef is defined ONCE in session_ref.proto and referenced here, never
+// redefined (D66/D44; doc 14 §2/§4; freeze-PR session-ref unification).
+import "dreamserpent/boundary/v1/session_ref.proto";
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/boundary/v1;boundaryv1";
+
+// SuspendReasonClass — the D77 reason taxonomy (NOT the original D53).
+//
+// D77 revises D53: VM suspension is NOT the default response to a policy
+// question — rung 2 is reserved for GENUINE THREATS (doc 04 §6 D77 row).
+// The two D77 classes encoded here, verified against the D77 row:
+//   - BLOCKLIST_HIT     — a hit on a blocklist: threat-intel feeds AND
+//                         org-defined entries (the D77 "blocklist hits
+//                         (threat-intel feeds + org-defined entries)"
+//                         clause; the BLOCKLIST_SOURCE_* fields below
+//                         carry which).
+//   - ACTION_SUSPEND_RULE — a rule explicitly configured action: suspend
+//                         (operations the org marks dangerous — bulk
+//                         deletes, anomalous-volume sends; the D77 "rules
+//                         explicitly configured `action: suspend`"
+//                         clause).
+// Ordinary policy events do NOT suspend — they surface as in-band
+// failures (NXDOMAIN / 403 / 429) the agent self-heals from (D77);
+// behavioral caps default action: block, not suspend. Those non-suspend
+// dispositions are intentionally NOT members of this enum.
+enum SuspendReasonClass {
+  SUSPEND_REASON_CLASS_UNSPECIFIED = 0;
+  SUSPEND_REASON_CLASS_BLOCKLIST_HIT = 1;
+  SUSPEND_REASON_CLASS_ACTION_SUSPEND_RULE = 2;
+}
+
+// BlocklistSource — which blocklist a BLOCKLIST_HIT matched (D77: the two
+// blocklist provenances are threat-intel feeds and org-defined entries).
+// Only meaningful when reason_class == SUSPEND_REASON_CLASS_BLOCKLIST_HIT.
+enum BlocklistSource {
+  BLOCKLIST_SOURCE_UNSPECIFIED = 0;
+  BLOCKLIST_SOURCE_THREAT_INTEL = 1;
+  BLOCKLIST_SOURCE_ORG_DEFINED = 2;
+}
+
+// SuspendSignal — boundary -> orchestrator suspend notification.
+//
+// The orchestrator acks and drives Suspend(reason) on the driver, owning
+// the D46 escalation clock (doc 15 §4.3, §6). Idempotent on dedup_key:
+// the orchestrator collapses retransmits of the same triggering event so
+// a single threat does not drive repeated Suspend calls.
+message SuspendSignal {
+  // The session to suspend (D66/D44 join key — defined in log1.proto).
+  SessionRef session = 1;
+
+  // The D77 reason class (taxonomy, NOT original D53) — see
+  // SuspendReasonClass.
+  SuspendReasonClass reason_class = 2;
+
+  // When reason_class == BLOCKLIST_HIT, which blocklist matched
+  // (threat-intel vs org-defined, D77). UNSPECIFIED for the
+  // action:suspend-rule class.
+  BlocklistSource blocklist_source = 3;
+
+  // POL-3 provenance of the triggering rule: matched rule id, policy
+  // layer, policy version (doc 15 §4.3 "POL-3 provenance (matched rule,
+  // layer, policy version)"; POL-3). The one-line "why was this
+  // suspended?" answer.
+  string matched_rule_id = 4;
+  string policy_layer = 5;
+  uint64 policy_version = 6;
+
+  // Dedup key (doc 15 §4.3): a stable identifier for the triggering
+  // event so the orchestrator collapses retransmits / duplicate signals
+  // onto one Suspend drive. The boundary chooses the key so that two
+  // signals for the same triggering event share it (e.g. session +
+  // matched rule + triggering-flow identity); the contract is only that
+  // it is stable per triggering event, not its internal composition.
+  string dedup_key = 7;
+}

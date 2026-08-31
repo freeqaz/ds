@@ -1,0 +1,5 @@
+{
+  "_comment": "Synthetic VIOLATION (grant-TTL leg): a fresh token (1700003600, +3600s) but a matched grant whose OWN TTL is already past the fence (1699999400, -600s). The check must FAIL with inject-class-grant-ttl-expired — the grant-TTL freshness leg (refimpl.go HonestDecision step 4), independent of the token: a stale cached grant denies the swap even while the token is fresh.",
+  "policy": { "now_unix": 1700000000 },
+  "presentation": { "token_ttl_unix": 1700003600, "grant_ttl_unix": 1699999400 }
+}

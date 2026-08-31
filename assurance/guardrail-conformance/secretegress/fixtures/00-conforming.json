@@ -1,0 +1,15 @@
+{
+  "_comment": "Synthetic CONFORMING feed + egress picture: a forbidden canary registered through the keyed feed with all four pushed variants (RAW/BASE64/URLENC/HEX). Exfil attempts on INSPECTED paths — raw and each encoded variant — are all BLOCKED at the configured rung, with the canary value in zero spool bytes; a pass-through tunnel attempt (TLS-4) is unflagged for egress by the stated non-claim. The check must pass (zero violations): the canary never egresses on inspected paths and never appears in any record.",
+  "feed": {
+    "canary": "forbidden-deploy-canary",
+    "pushed_variants": ["RAW", "BASE64", "URLENC", "HEX"]
+  },
+  "attempts": [
+    { "dest": "allowed-domain request body (raw)",   "path": "inspected",   "canary_variant": "RAW",    "blocked": true,  "canary_in_spool": false },
+    { "dest": "allowed-domain header (base64)",       "path": "inspected",   "canary_variant": "BASE64", "blocked": true,  "canary_in_spool": false },
+    { "dest": "allowed-domain query string (urlenc)", "path": "inspected",   "canary_variant": "URLENC", "blocked": true,  "canary_in_spool": false },
+    { "dest": "allowed-domain body (hex)",            "path": "inspected",   "canary_variant": "HEX",    "blocked": true,  "canary_in_spool": false },
+    { "dest": "no-canary plain request",              "path": "inspected",   "canary_variant": "",       "blocked": false, "canary_in_spool": false },
+    { "dest": "pinned-client opaque tunnel",          "path": "pass_through", "canary_variant": "RAW",    "blocked": false, "canary_in_spool": false }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "row": "dns-rebinding-fails",
+  "kind": "approved-name-re-resolves",
+  "domain": "api.allowed.example",
+  "dst_ip": "::ffff:10.0.0.5",
+  "want": "scrub-no-silent-widen",
+  "why": "rebinding via an IPv4-mapped IPv6 answer (::ffff:10.0.0.5): DNS-4 rule 2 checks the embedded v4 against the v4 rules before admission, so the mapped-private address gains nothing (DNS-4 dual-stack scrub)"
+}

@@ -1,0 +1,25 @@
+{
+  "kind": "transparent-curl-get",
+  "why": "doc 06 §2.2 row 1: a curl client over the transparent path is INDISTINGUISHABLE from talking to a vanilla proxy; the only observable difference is policy/telemetry. This golden pins the request/response SHAPE (headers byte-identical, bodies by digest) so a regression in the TLS-1 opaque tunnel OR the DS_TLS3_LIVE inspected path is caught by byte-identity replay.",
+  "sni": "conformance.example",
+  "request": {
+    "method": "GET",
+    "path": "/data",
+    "headers": [
+      "accept: */*",
+      "host: conformance.example",
+      "user-agent: curl/8.x"
+    ],
+    "body_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "body_len": 0
+  },
+  "response": {
+    "headers": [
+      "content-type: application/octet-stream",
+      "server: ds-tlsproxy-conformance-origin"
+    ],
+    "status": 200,
+    "body_digest": "sha256:0ae2ae44467f2c20a686a23281db185cb19635dc971f56dd0d585a01b0df550c",
+    "body_len": 117
+  }
+}

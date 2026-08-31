@@ -1,0 +1,27 @@
+# drift class: COMPOUND — both reader surfaces drift at once, under INDEPENDENT
+#   causes. The top-level `blocklist` key is quoted (resolver-lock SHAPE drift)
+#   AND a baseline-pack family declares an unknown tier (POL-1 SCHEMA drift).
+# named edge shape: quoted blocklist key (Go) + unknown tier (Rust).
+# expected verdict (go, rust) = (reject, reject)  <-- compound both-reject, DIFFERENT causes
+# Go: ErrNoBlocklistSection — the line scanner tests `HasPrefix(trimmed,
+#     "blocklist:")` on the raw (still-quoted) key, so `"blocklist":` is not the
+#     section opener; nothing extracts. This is a resolver-lock SHAPE rejection;
+#     the Go scanner never inspects baseline_pack families, so the unknown tier is
+#     invisible to it.
+# Rust: BadValue — parse_layer unquotes mapping keys, so `"blocklist":` binds the
+#     blocklist cleanly; the rejection comes from Tier::parse("turbo") on the
+#     baseline-pack family (POL-1 schema), a cause the Go side cannot see. The two
+#     causes are INDEPENDENT: the Go cause is the quoted-key SHAPE, the Rust cause
+#     is the schema tier value — proving a reader cannot mask one error behind the
+#     other.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+baseline_pack:
+  families:
+    core: { tier: turbo }
+"blocklist":
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

@@ -1,0 +1,1 @@
+{"ds_fixture":{"provenance":"synthetic","seam":"guardrail-conformance/nftgate doh-dot-bypass-fails (doc 06 §3c; NFT-4)","created":"2026-06-13","note":"hand-authored DoT-bypass case: a DNS-over-TLS attempt on tcp/853 is dropped by NFT-4; resolver name/IP are public well-knowns, never a live session destination (D50)."}}

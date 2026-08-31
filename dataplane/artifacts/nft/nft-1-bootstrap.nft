@@ -1,0 +1,200 @@
+#!/usr/sbin/nft -f
+#
+# NFT-1 — Host bootstrap ruleset (default-deny) + NFT-2 transparent redirect.
+# artifact-version: 2
+# governing: doc 09 §3 (NFT-1/NFT-2) · doc 03 §3 · doc 14 §5/§11 · D3/D4 D44 D66 D69 D70 D75 D76
+#
+# WHAT THIS IS
+#   The versioned, declarative host bootstrap ruleset installed by a systemd unit
+#   at boundary start (ds-nft-bootstrap.service). One `inet` table, base chains
+#   with default DROP for all traffic originating on per-session agent-VM tap
+#   interfaces, established/related allowed back in, and nothing else. This is a
+#   BUILD ARTIFACT, never hand-applied state — if you are typing `nft` into a host
+#   shell, you are doing it wrong (doc 09 §3). Runtime mutations come only through
+#   `ds-nft` writes layered on top of this floor; later steps (NFT-2 redirect,
+#   NFT-3 per-session allow-sets, NFT-5 ct-mark accounting) extend it.
+#
+# INTERFACE MATCHING (D66, doc 03 §3)
+#   Per-session taps are named `dstap-<idx>` (≤15 chars, never-recycled host-local
+#   index). We match `iifname "dstap-*"` — the attachment point — NEVER source IP:
+#   addresses can be forged from inside the VM, the attachment point cannot.
+#
+# FAMILY (D75, doc 14 §11)
+#   Authored in the `inet` family so IPv6 is dropped by default while v6 is dormant.
+#   No icmpv6 allowances here — the v6 twin stays dormant until v6 turns on end to
+#   end (DNS-1/OQ10). Per-session taps additionally run disable_ipv6=1 / accept_ra=0
+#   per the host baseline (../host-baseline/, doc 14 §11) — consumed by reference.
+#
+# HOST BASELINE (versioned artifact, doc 14 §11)
+#   This ruleset assumes the versioned host baseline in
+#   ../host-baseline/host-baseline.v0.json: kernel ≥6.12 (D68), the conntrack
+#   sysctls (nf_conntrack_tcp_loose=0 / acct=1 / timestamp=1, D68), the per-session
+#   tap posture (disable_ipv6=1 / accept_ra=0, inet family, D75), and br_netfilter
+#   FORBIDDEN (D66). The two artifacts VERSION TOGETHER — the ds-nft-bootstrap
+#   systemd unit applies the baseline sysctls/taps before loading this ruleset, and
+#   the doc 06 (c) suite (assurance/guardrail-conformance/nftgate, hostbaseline_test.go)
+#   fails RED on any drift between them. The `inet` family below is exactly the
+#   baseline's per_session_tap.ruleset_family, cross-checked by that suite.
+#
+# MARKS (D76, doc 14 §5)
+#   NFT-1 needs NO marks at all. No packet-mark or conntrack-mark expression and no
+#   mark literal appears anywhere in this file by design; the CI mark lint
+#   (ds-contracts) enforces it. The mark machinery arrives later with NFT-5 at
+#   Stage 1, sourced only from ds-contracts constants — never authored here.
+#
+# SCOPE FENCE
+#   NFT-1 is default-deny; NFT-2 adds the Stage-1 udp/tcp 53 → ds-dnsgate redirect
+#   in the nat prerouting chain below (the single nat-type prerouting REDIRECT
+#   chain the D69 closure assigns to this artifact, doc 09 OQ4). The floor ALSO
+#   owns the udp/443 (QUIC) reject+count (D70) in its `forward` chain so the floor
+#   is self-sufficient (no dependence on the separately-installed NFT-4 table) —
+#   see the forward-chain comment for the drop-terminal-vs-accept rationale. Still
+#   out of scope here: the NFT-2b 80/443 → ds-tlsproxy cutover (lands with TLS-1)
+#   and the NFT-3 per-session allow-sets. Default DROP covers everything not
+#   explicitly redirected; default REJECT (icmpx port-unreachable) covers new
+#   udp/443 specifically (D70).
+#
+# NFT-2 REDIRECT (D69, doc 09 §3, round2/04)
+#   The transparent path is REDIRECT/DNAT (D69 chose redirect over tproxy for v0).
+#   Rules match `iifname` ONLY — never `ip saddr` (the VM forges its source; the
+#   attachment point it cannot, doc 03 §3). This is the doc 06 (c) in-VM-spoofing
+#   invariant: a forged source address cannot escape the redirect, because the
+#   rule never consults the source. The proxy recovers the original destination
+#   and the session from kernel sources behind the frozen ConnOrigin seam
+#   (ds-contracts::conn_origin — SO_ORIGINAL_DST for the dst, the post-NAT local
+#   address for the session; recovery failure REFUSES). The redirect target port
+#   (:15353) is a FREE strawman (round2/04 "Frozen vs free" — exact port numbers
+#   are free); never `dnat to 127.0.0.1` (the route_localnet footgun, D69).
+
+# Idempotent install: drop and recreate our own table only. We never touch other
+# tables in the netns (ops-access WireGuard, systemd-networkd, etc. — doc 14 §5).
+table inet ds_boundary
+delete table inet ds_boundary
+
+table inet ds_boundary {
+
+	# ---- Filter chains -------------------------------------------------------
+	# Default DROP for input and forward. Established/related is allowed back in
+	# so return traffic for host-originated and (later) admitted flows survives.
+	# The forward chain additionally REJECTS new udp/443 (QUIC) so the floor is
+	# self-sufficient (no dependence on NFT-4) and the refusal is observable per
+	# D70 — see the in-chain comment for the cross-base-chain shadowing rationale.
+
+	chain input {
+		type filter hook input priority filter; policy drop;
+
+		# Return traffic for connections the host itself established.
+		ct state established,related accept
+
+		# Host loopback.
+		iifname "lo" accept
+
+		# Everything else to the host — including anything arriving on a
+		# per-session tap — is dropped by the default policy.
+	}
+
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+
+		# Return path for already-established flows rides conntrack and is
+		# never severed by the default-deny floor.
+		ct state established,related accept
+
+		# udp/443 (QUIC) from a per-session tap: REJECTED, not dropped — and
+		# rejected HERE in the floor, not (only) in NFT-4. Why the floor owns it:
+		#
+		#  * Floor self-sufficiency (no dependence on NFT-4). doc 09 §3 NFT-1's
+		#    done-when is "a VM behind a freshly bootstrapped host can reach
+		#    nothing at all". NFT-4 (table ds_resolver_closure) is a SEPARATE,
+		#    independently-removable table — absent on a freshly-bootstrapped
+		#    baseline before its ExecStart runs, after an NFT-4 install failure, or
+		#    after its own `delete table inet ds_resolver_closure` rollback. The
+		#    floor must therefore reject udp/443 on its own, never leaning on NFT-4
+		#    being present. (A first attempt that carved udp/443 out of this floor
+		#    with an `accept` so it "fell through" to NFT-4 was rejected as a
+		#    fail-open leak: with NFT-4 absent the accept egresses udp/443.)
+		#  * D70 reject-not-drop. udp/443 must be `reject`ed (icmp/icmpv6
+		#    port-unreachable, family-appropriate via icmpx) + `counter`ed, never
+		#    silently dropped — so the refusal is observable (no RFC-4074 ~5s
+		#    client hang; the flip-to-inspect trigger can see it; the QuicBlocked
+		#    per-session tally has its on-box source) and non-cooperative QUIC
+		#    clients fall back to the TCP/443 path the egress gateway can inspect.
+		#  * drop-terminal-vs-accept across base chains. nftables base chains run
+		#    per-hook in ascending priority and a `drop` verdict is TERMINAL across
+		#    chains (an `accept` is not). This forward chain is priority `filter`
+		#    (0); NFT-4's forward chain is priority 1 (after us). So the terminal
+		#    `drop` below would shadow ANY later-chain udp/443 verdict — NFT-4's
+		#    reject could never fire. The reject must precede the drop in THIS
+		#    chain. This cross-base-chain shadowing is the regression tracked as
+		#    taskdb 01KTZV3XN.
+		#  * UNADMITTED-QUIC DEFAULT (not a permanent block). This is the default
+		#    verdict for an UNADMITTED (dest, udp/443) flow, mirroring how tcp/443
+		#    is default-denied then admitted per session (NFT-3 allow-sets). The
+		#    path to eventually SUPPORTING QUIC is a per-session admit rule that
+		#    ACCEPTS an admitted (dest, udp/443) flow BEFORE this reject (an
+		#    `accept` placed earlier in the forward path) — not removing or
+		#    weakening this default. `ct state new` keeps the reject scoped to NEW
+		#    flows so a future admitted/established QUIC stream (accepted earlier,
+		#    riding the established,related accept above) is never severed.
+		#
+		# `ct state new udp dport 443` is strictly NARROWER than the terminal drop
+		# that follows: only new udp/443 is rejected here; everything else new on a
+		# tap still falls to the drop. NFT-4 keeps an identical reject as
+		# defense-in-depth (redundant once this fires first), so the
+		# RowQUICReject->NFT4 conformance ownership and the ds-nft quic_reject shape
+		# lint stay live over that artifact.
+		iifname "dstap-*" ct state new udp dport 443 counter reject with icmpx type port-unreachable
+
+		# Traffic ORIGINATING on a per-session agent-VM tap (a freshly
+		# bootstrapped host has no admit rules yet, so `ct state new` from a
+		# tap has nothing to match and reaches this terminal drop): explicit,
+		# auditable marker for the interface NFT-2/NFT-3 will anchor on.
+		# Intentionally NOT an accept — the VM can reach nothing.
+		#
+		# DROP-OBSERVE (D50, NFT-5/NFT-6, doc 09 §7). The terminal drop ADOPTS
+		# the canonical NFT-5 drop-observe shape (ds-nft
+		# `flowtag::floor_drop_observe_rule` — the single source this artifact
+		# stays byte-consistent with, never a divergent hand-edit): `counter
+		# log prefix "ds-nft5-drop " group 5 drop`. The dropped NEW flow is now
+		# OBSERVED on the group-5 `nflog` stream, and — because the separately
+		# installed NFT-5 `ds_flowtag` table stamped the session's composite
+		# `ct mark` at an earlier priority — that nflog line carries the session
+		# (ds-telemetry `flow::parse_nflog_drop_line` keys on the `ds-nft5-drop`
+		# prefix + the `MARK=` field, doc 09 §7). The verdict is unchanged: it
+		# still `drop`s (terminal across base chains); the `counter`+`log` are
+		# pure accounting layered ahead of the same drop. When NFT-5 is absent
+		# the drop still fires and the nflog line simply carries no session mark.
+		iifname "dstap-*" ct state new counter log prefix "ds-nft5-drop " group 5 drop
+
+		# Everything else forwarded is dropped by the default policy.
+	}
+
+	chain output {
+		# Host-originated egress (boundary services dialing upstream, package
+		# mirrors, ops access) is not constrained by NFT-1 — agent-VM traffic
+		# is forwarded, not host-output. The OUTPUT-chain enforcement layer
+		# (SO_MARK / vmap, doc 14 §5) builds at Stage 3, off the M1 gate list.
+		type filter hook output priority filter; policy accept;
+	}
+
+	# ---- NAT prerouting (NFT-2 transparent redirect, D69) --------------------
+	# The single nat-type prerouting REDIRECT chain the D69 closure assigns to
+	# the NFT-1 artifact (doc 09 OQ4 resolution). Priority `dstnat` (-100); a
+	# future tproxy lane coexists at -150 per D69. Stage 1 populates it with the
+	# udp/tcp 53 → ds-dnsgate redirect ONLY; the NFT-2b 80/443 cutover is added
+	# with TLS-1, not here.
+	chain prerouting {
+		type nat hook prerouting priority dstnat; policy accept;
+
+		# NFT-2: udp/tcp 53 from agent-VM taps → ds-dnsgate. Matched on the
+		# unforgeable attachment point (`iifname`), NEVER source IP — a packet
+		# with a forged `ip saddr` still arrives on its real tap, so the redirect
+		# catches it regardless (doc 06 (c) in-VM-spoofing). Both transports are
+		# redirected so DNS-over-TCP cannot bypass the resolver (NFT-4). The proxy
+		# recovers the original dst (e.g. a non-local resolver the VM aimed at —
+		# the NFT-5 bypass-attempt signal, round2/04) via SO_ORIGINAL_DST behind
+		# the ConnOrigin seam; udp/53 needs no dst recovery to answer.
+		iifname "dstap-*" udp dport 53 redirect to :15353
+		iifname "dstap-*" tcp dport 53 redirect to :15353
+	}
+}

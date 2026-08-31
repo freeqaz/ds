@@ -1,0 +1,64 @@
+# ds-mirror-refresh.service — periodic host-local git mirror refresh.
+#
+# oneshot, NO long-running process: it runs `mirror.sh refresh-all`, which does
+# `git remote update --prune` for every bare mirror under DS_MIRROR_ROOT, then
+# exits. Scheduled by ds-mirror-refresh.timer.
+#
+# Mirror-to-upstream fetch rides the boundary credential-swap path (egress
+# gateway / ds-tlsproxy, D83; doc 16 §5): this unit presents only a short-lived
+# workload credential and holds no long-lived upstream credentials.
+#
+# Install: place this tree's deploy/ files under /etc/dream-serpent/mirror/ (or
+# adjust the paths below) and `systemctl enable --now ds-mirror-refresh.timer`.
+
+[Unit]
+Description=Dream Serpent host-local git mirror refresh
+Documentation=https://example.invalid/dream-serpent/images/mirror/README.md
+# Refresh egress must traverse the boundary; do not start before it is up.
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/dream-serpent/mirror/ds-mirror.env
+
+# ── Boundary egress enrollment (D63 boundary path + D83 credential swap) ──────
+# This refresh is a GATED EGRESS WORKLOAD: its mirror→upstream fetches leave the
+# host only through the TLS-terminating egress gateway (ds-tlsproxy, D63), which
+# swaps a short-lived workload credential for the real upstream credential
+# OUTSIDE the trust boundary via the generic Authorization-header swap (D83).
+# Long-lived upstream credentials NEVER enter this unit (see the [Service]
+# ReadWritePaths / "no long-lived credential files" note below). These env vars
+# are the enrollment seam; their literals are kept in lockstep with the
+# "Boundary enrollment" table in ../README.md BY HAND (the lint-env-drift.sh
+# README-token guard asserts the five Concrete-defaults tokens, NOT these
+# egress-enrollment literals — keep this block and that table in agreement by
+# convention until a guard is added). The proxy endpoint/port match the host's egress
+# gateway listener; the workload presents DS_MIRROR_EGRESS_CRED_REF (a reference
+# to a short-lived credential minted per refresh, NOT a stored secret) and the
+# gateway substitutes the real credential for the allowed upstream set.
+Environment=DS_MIRROR_EGRESS_GATEWAY=ds-tlsproxy
+Environment=DS_MIRROR_EGRESS_SWAP=authorization-header-swap
+Environment=DS_MIRROR_EGRESS_CRED_REF=workload:ds-mirror-refresh
+Environment=DS_MIRROR_EGRESS_UPSTREAMS=github.com,api.github.com,codeload.github.com
+Environment=HTTPS_PROXY=http://127.0.0.1:18080
+Environment=HTTP_PROXY=http://127.0.0.1:18080
+Environment=NO_PROXY=127.0.0.1,localhost,mirror.ds.local,cache.ds.local
+
+# mirror.sh lives alongside this tree; install path is operator-chosen.
+ExecStart=/opt/dream-serpent/images/mirror/mirror.sh refresh-all
+
+# Run unprivileged; the mirror root is owned by this user.
+User=ds-mirror
+Group=ds-mirror
+
+# Hardening: the refresh needs only the mirror root writable + outbound egress.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/ds-mirror
+# No long-lived credential files exist for this unit to read.
+
+[Install]
+WantedBy=multi-user.target

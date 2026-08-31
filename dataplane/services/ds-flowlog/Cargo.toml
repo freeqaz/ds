@@ -1,0 +1,13 @@
+[package]
+name = "ds-flowlog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Deliberately empty at skeleton time — the workspace must `cargo check` offline.
+# When code lands: ds-contracts (LOG-1 types, mark decode constants),
+# ds-telemetry (spool/emission conventions), tokio 1.x (pinned workspace major).
+# Read-only consumer of kernel conntrack/nflog event sources; never a policy
+# evaluator and never an nftables writer.

@@ -1,0 +1,8 @@
+image: /var/lib/ds/sessions/01HEXSESS/overlay.qcow2
+file format: qcow2
+virtual size: 12 GiB (12884901888 bytes)
+disk size: 196 KiB
+cluster_size: 65536
+Format specific information:
+    compat: 1.1
+    lazy refcounts: false

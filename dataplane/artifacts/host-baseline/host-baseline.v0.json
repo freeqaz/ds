@@ -1,0 +1,37 @@
+{
+  "_comment": "SPDX-License-Identifier: Apache-2.0 — versioned host-baseline v0 artifact (doc 14 §11 / doc 13 §4). NOT pushed over the policy stream: this versions with the NFT-1 ruleset + host image and is applied at host bring-up; drift is caught by CI + the doc 06 (c) suite (assurance/guardrail-conformance/nftgate), never by the D72 revocation sweep. JSON (not the doc 13 §4 YAML strawman) so the stdlib-only (c) suite parses it with encoding/json — the README pins the field semantics. Bump artifact_version and add a host-baseline.vN.json on any obligation change.",
+  "license": "Apache-2.0",
+  "artifact_version": 0,
+  "governing_decisions": ["D68", "D66", "D75", "D76"],
+  "not_pushed_over_policy_stream": true,
+  "kernel": {
+    "min_version": "6.12",
+    "fallback": "delete+add",
+    "both_paths_in_ci": true
+  },
+  "libvirt": {
+    "isolated_ports_chosen": false,
+    "min_version_if_isolated_ports": "6.1.0"
+  },
+  "l2_isolation": {
+    "structural": true,
+    "br_netfilter_forbidden": true
+  },
+  "sysctls": {
+    "net.netfilter.nf_conntrack_tcp_loose": 0,
+    "net.netfilter.nf_conntrack_acct": 1,
+    "net.netfilter.nf_conntrack_timestamp": 1
+  },
+  "per_session_tap": {
+    "disable_ipv6": 1,
+    "accept_ra": 0,
+    "ra_dhcpv6_on_segment": false,
+    "ruleset_family": "inet"
+  },
+  "nft_mark_lint": {
+    "ruleset": "dataplane/artifacts/nft/nft-1-bootstrap.nft",
+    "constants_source": "ds-contracts",
+    "forbid_bits_14_23": true,
+    "forbid_unmasked_writes": true
+  }
+}

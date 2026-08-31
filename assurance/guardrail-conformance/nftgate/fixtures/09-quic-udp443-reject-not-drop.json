@@ -1,0 +1,7 @@
+{
+  "row": "quic-udp443-reject-not-drop",
+  "kind": "quic-udp-443",
+  "dst_ip": "203.0.113.10",
+  "want": "reject-icmp-port-unreachable-counted",
+  "why": "QUIC: udp/443 from an agent-VM interface is REJECTED with ICMP port-unreachable and COUNTED per session (D70), never silently dropped, to force TCP fallback the proxy can see; a silent drop would FAIL this row"
+}

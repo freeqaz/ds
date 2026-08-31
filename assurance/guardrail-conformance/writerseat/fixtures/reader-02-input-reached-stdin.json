@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthetic VIOLATION write-leg participant set for the D137 no-inject re-green (sessions/10 §5 claim 4). A ROLE_READER spectator's input reached Claude Code's stdin while reaching no WriterRelay RPC at all (a hypothetical v1-read-leg injection path the re-green exists to catch). The read-only surfaces (v1 WatchSession / SSE / WS) must stay structurally read-only with the v2 write leg present. The check must report writerseat-reader-cannot-reach-writer-relay (reader-input-reached-stdin).",
+  "participants": [
+    { "name": "injecting-spectator", "role": "ROLE_READER", "reached_writer_relay_surfaces": [], "input_reached_stdin": true }
+  ]
+}

@@ -1,0 +1,38 @@
+# drift class: COMPOUND both-ACCEPT — both reader surfaces are exercised at once
+#   under INDEPENDENT benign variations, and BOTH accept. The `guardrails:` block
+#   holds only comments, no live children (resolver-lock SHAPE variation, Go-benign)
+#   AND a baseline-pack family declares a valid `tier: enabled` (POL-1 SCHEMA
+#   variation, Rust-benign).
+# named edge shape: comment-only guardrails (Go) + valid family tier (Rust).
+# expected verdict (go, rust) = (accept, accept)  <-- compound both-accept, DIFFERENT axes
+# This is the both-ACCEPT complement of the both-REJECT compound block (20-23): it
+# pins benign acceptance across BOTH axes on ONE artifact, so a regression that
+# started REJECTING a benign compound on EITHER reader surface is caught loudly.
+# Go: accept — both readers strip comments before structural interpretation; the Go
+#     line scanner sees the `guardrails:` top-level key (which closes the blocklist
+#     section anyway) carrying only commented-out children, a benign comment-only
+#     block (the 19-comment-only SHAPE class). The Go scanner never reads guardrails
+#     or families, so it sees only a well-formed, non-empty blocklist and accepts.
+# Rust: accept — parse_layer sees an empty guardrails sequence (a comment-only block
+#     yields no rules, no PolicyError), AND the baseline-pack family declares a valid
+#     `tier: enabled`, so Tier::parse succeeds and the §3 families schema is clean
+#     (the accept path of the 10-unknown-tier SCHEMA class). The two benign axes are
+#     INDEPENDENT: the Go-invisible axis is the comment-only guardrails SHAPE, the
+#     Rust-exercised axis is the family-tier SCHEMA on a BASELINE-PACK family —
+#     neither reader can mask the other's acceptance.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+baseline_pack:
+  families:
+    core: { tier: enabled }
+guardrails:
+  # - id: egress-rate-1
+  #   class: egress
+  #   rung: block+log
+  # (all guardrail rules commented out — intentionally empty)
+blocklist:
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

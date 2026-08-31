@@ -1,0 +1,17 @@
+# drift class: a blocklist entry is indented with a TAB character.
+# named edge shape: tab indentation (a whitespace-shape drift).
+# expected verdict (go, rust) = (accept, reject)
+# Rust: Syntax — YamlNode::logical_lines rejects any tab in indentation
+#     ("use spaces"), so the whole document fails to parse.
+# Go: the resolver-lock scanner trims leading whitespace before its tests, so a
+#     tab-indented `- domain:` still matches and the entry extracts. The Rust
+#     reader is the tab tripwire (complementary coverage). NOTE: the tab below is
+#     a real U+0009 byte on the `- domain:` line and its continuation lines.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+blocklist:
+	- domain: dns.example
+	  reason: doh-resolver
+	  rung: block+log
+passthrough: []

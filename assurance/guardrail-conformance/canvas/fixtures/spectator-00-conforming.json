@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthetic CONFORMING viewer set for the re-filed spectator no-inject row (doc 06 §3c; D61). A driver-role seat whose input is accepted and two spectator-role live-view participants whose input is NOT accepted. The check must pass (zero violations): a read-only spectator provably cannot inject input into the session.",
+  "viewers": [
+    { "name": "driver-seat", "role": "driver", "input_accepted": true },
+    { "name": "spectator-alice", "role": "spectator", "input_accepted": false },
+    { "name": "spectator-bob", "role": "spectator", "input_accepted": false }
+  ]
+}

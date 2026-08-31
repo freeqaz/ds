@@ -1,0 +1,17 @@
+::session attached  model=claude-sonnet-4-6  runtime=2.1.173  perm=bypassPermissions  cwd=/work  tools=[Task]
+--state -> WORKING (task_open)
++ spawn outer: Outer task
+  + spawn middle: Middle task
+    + spawn grand: Grandchild task [parent inferred]
+  .   ... working (Agent)
+    # subagent accounted tokens=540 dur=1080ms out=GRANDWORD
+  # subagent accounted tokens=1240 tools=1 dur=2600ms out=MIDDLEWORD
+# subagent accounted tokens=2360 tools=1 dur=5200ms out=OUTERWORD
+    * subagent completed: grandchild done
+  * subagent completed: middle done
+* subagent completed: outer done
+> assistant: depth-3 nested spawn complete
+% quota tokens ok (provisional)
+==session success turns=4 dur=6800ms reason=completed
+--state -> ATTACHED (turn_complete)
+[ session 000000000004 | state ATTACHED | success | seq 16 ]

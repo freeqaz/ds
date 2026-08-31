@@ -1,0 +1,17 @@
+::session attached  model=claude-sonnet-4-6  runtime=2.1.173  perm=bypassPermissions  cwd=/work  tools=[Task]
+ ~thinking: I will fan out three subagents in one turn and report when all return.
+--state -> WORKING (task_open)
++ spawn alpha: Alpha scan
++ spawn bravo: Bravo scan
++ spawn charlie: Charlie scan
+* subagent completed: charlie done
+# subagent accounted tokens=1051 dur=1098ms out=CHARLIE
+* subagent completed: bravo done
+# subagent accounted tokens=1272 dur=3447ms out=BRAVO
+* subagent completed: alpha done
+# subagent accounted tokens=1534 dur=7451ms out=ALPHA
+> assistant: all three subagents returned
+% quota tokens ok (provisional)
+==session success turns=2 dur=9100ms reason=completed
+--state -> ATTACHED (turn_complete)
+[ session 000000000002 | state ATTACHED | success | seq 16 ]

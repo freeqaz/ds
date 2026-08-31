@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthetic NEGATIVE CONTROL (a): the empty-by-default invariant is regressed — the shipped baseline pack (is_default=true) ships a pass-through entry (pinned.example.com). The D17 pass-through list ships EMPTY by default (D74); an entry must be added deliberately with attached reproduction evidence, never shipped in the baseline. Must FAIL with the named class default-pass-through-list-not-empty.",
+  "is_default": true,
+  "endpoints": [
+    { "host": "pinned.example.com", "pass_through": true,  "tls_terminated": false, "swap_performed": false },
+    { "host": "github.com",         "pass_through": false, "tls_terminated": true,  "swap_performed": true }
+  ]
+}

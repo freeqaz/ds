@@ -1,0 +1,91 @@
+// Dream Serpent — boundary.v1 ask-user seam.
+//
+// One of the three non-LOG-1 Stage-0 boundary->orchestrator seams
+// (doc 14 §2b; counterparty ledger doc 15 §6). Owner = Boundary;
+// counterparty = Orchestrator (doc 15 §6); freeze deadline = Stage 0;
+// change control = buf-gated, additive-only post-freeze (the same regime
+// as the §2 LOG-1 checklist).
+//
+// STRICTLY ONE-WAY: this seam is a NOTIFICATION boundary -> orchestrator
+// and NOTHING else. The orchestrator terminates the notification and
+// relays it into the D18 client wrapper (doc 16 §8.2 routing). There is
+// deliberately NO paired response message and NO return RPC pair (POL-5;
+// see AskUserRequest below) — approvals come back by an entirely separate
+// channel, the already-frozen policy stream. The boundary never grows its
+// own approval UI (POL-5; doc 09 §5).
+syntax = "proto3";
+
+package dreamserpent.boundary.v1;
+
+// SessionRef is defined ONCE in session_ref.proto and referenced here, never
+// redefined (the orchestrator session record is the authority,
+// doc 14 §2/§4; D66/D44; freeze-PR session-ref unification).
+import "dreamserpent/boundary/v1/session_ref.proto";
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/boundary/v1;boundaryv1";
+
+// AskConsentClass — RESERVED enum mirroring the D60 per-repo content
+// consent classes (metadata | session | workload). RESERVATION ONLY:
+// the field that carries it (AskUserRequest.consent_class) is RESERVED,
+// no population behavior is frozen, and the election itself rides the
+// existing policy snapshot (D60; doc 08 §3 introspection-by-consent;
+// telemetry gated per tier, doc 15 §9) — so NO message-set change and NO
+// `.proto` body behavior is implied. The enum is declared so the
+// reserved field has a frozen type at zero migration cost; a missed
+// reservation would be a v2-package event because the Stage-0 freeze is
+// one-shot (doc 14 §2b AskUserRequest row). This mirrors the identity.v1
+// precedent — doc 16 §9 carries the D60 consent-class flag on the
+// AskIssued/Approved/Denied approval events; the ask `resource kind /
+// name` an ask carries is the boundary-side payload those identity events
+// tag, so the carry-or-reserve obligation lands on this transport too.
+enum AskConsentClass {
+  ASK_CONSENT_CLASS_UNSPECIFIED = 0;
+  ASK_CONSENT_CLASS_METADATA = 1;
+  ASK_CONSENT_CLASS_SESSION = 2;
+  ASK_CONSENT_CLASS_WORKLOAD = 3;
+}
+
+// AskUserRequest — the one-way boundary -> orchestrator ask notification.
+//
+// ONE-WAY, NO PAIRED RESPONSE (POL-5, deliberate). This message has no
+// AskUserResponse counterpart and no request/response RPC: the boundary
+// emits the notification, the orchestrator terminates it and relays into
+// the D18 client (doc 16 §8.2). An approval, when it arrives, returns
+// ONLY as a session-scoped, TTL'd allow grant appended to the policy_log
+// and delivered on the ALREADY-FROZEN policy stream (policy_stream.proto;
+// doc 15 §4.3 ask-grant write path) — never as a reply on this seam. A
+// denial likewise lands as the D118 session-scoped deny artifact on the
+// policy_log, not here. That is why no second response contract is
+// needed (doc 09 §8 Stage-0 prose cell; doc 14 §2b AskUserRequest row).
+message AskUserRequest {
+  // The asking session (D66/D44 join key — defined in log1.proto).
+  SessionRef session = 1;
+
+  // The resource being asked about: its kind (e.g. domain, service,
+  // escape-hatch protocol) and its name (e.g. the FQDN / service id).
+  // Together these are the boundary-side payload the identity-plane
+  // AskIssued/Approved/Denied events tag (doc 16 §8.2 / §9).
+  string resource_kind = 2;
+  string resource_name = 3;
+
+  // POL-3 provenance of the matched rule that raised the ask (matched
+  // rule id, policy layer, policy version) — the one-line "why was this
+  // asked?" answer (POL-3; doc 09 §8 "matched rule per POL-3"). Defined
+  // inline here as the ask-seam's own provenance triple; LOG-1's
+  // PolicyDecision carries the structurally-identical triple in its event
+  // stream (doc 14 §2) — they are the same shape, not a shared message,
+  // so this seam stays self-contained.
+  string matched_rule_id = 4;
+  string policy_layer = 5;
+  uint64 policy_version = 6;
+
+  // RESERVED: D60 consent-class tag (values metadata | session |
+  // workload, see AskConsentClass). Reservation only — NO population
+  // behavior frozen; the election rides the policy snapshot (D60;
+  // doc 15 §9), so no body change is implied (doc 14 §2b AskUserRequest
+  // row; mirrors the identity.v1 D60 flag, doc 16 §9). Field number 7 is
+  // reserved so a later additive optional field carries the tag without a
+  // v2-package event (the freeze is one-shot).
+  reserved 7;
+  reserved "consent_class";
+}

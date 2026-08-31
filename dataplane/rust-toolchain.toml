@@ -1,0 +1,6 @@
+# Pinned toolchain for the data-plane workspace (house pin policy per D40/D67:
+# pinned, moved deliberately, with a migration budget — not floated).
+# Bump via PR only; CI builds with exactly this toolchain.
+[toolchain]
+channel = "1.95.0"
+components = ["clippy", "rustfmt"]

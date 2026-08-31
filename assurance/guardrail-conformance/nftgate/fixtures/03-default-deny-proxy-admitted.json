@@ -1,0 +1,8 @@
+{
+  "row": "default-deny-outbound",
+  "kind": "proxied-tls-connect",
+  "domain": "api.allowed.example",
+  "dst_ip": "203.0.113.10",
+  "want": "allow",
+  "why": "the via-proxy control: an allowed domain whose original-dst IP is admitted FOR THAT DOMAIN passes the TLS-1 (domain, IP) admission check; proves admitted egress works through the gateway"
+}

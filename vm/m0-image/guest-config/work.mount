@@ -1,0 +1,72 @@
+# work.mount — the per-session WORKSPACE disk mount unit (dogfood, 01KWHCG6EV).
+#
+# The host materializes a workspace filesystem (the repo the session is meant to
+# work on) and attaches it as a THIRD disk; this unit mounts it so the agent's
+# runtime starts with the code already on disk.
+#
+# WHY A DISK AND NOT AN IN-GUEST CLONE: the dream-serpent repo is private, so a
+# `git clone` inside the guest would require a forge credential in the VM — the
+# one thing D22 rules out. The host holds the repo and the credential already, so
+# it hands over a filesystem instead and the guest needs no credential at all.
+#
+# CONTRACT MATCH (ds-make-workspace.sh builds it, the libvirt driver attaches it —
+# replicated here, NEVER imported; D80 keeps the guest tree out of orchestrator/):
+#   - filesystem  : ext4. READ-WRITE, unlike the config-drive: the agent edits
+#     code here, and this disk is the reviewable record of what it changed.
+#   - volume label: DS_WORKSPACE. Mounted by LABEL, never by device node — the
+#     guest may not assume the attach order of the 3rd disk, exactly as
+#     run-ds-entrypoint.mount refuses to guess /dev/vdb.
+#   - mount point : /work. The unit FILE NAME must be the systemd-escaped mount
+#     path (`systemd-escape -p --suffix=mount /work` == work.mount); a mismatch is
+#     rejected by systemd, so the bake asserts the two agree.
+#   - ownership   : the host builds the image with files owned by uid/gid 1000,
+#     which is the guest `ds` user the runtime runs as. ext4 carries no uid-mapping
+#     mount option, so this agreement is load-bearing rather than cosmetic — the
+#     bake asserts `ds` is uid 1000 so a future extra user cannot silently shift it
+#     and leave the agent with a read-only-in-practice workspace.
+#
+# FAIL-OPEN, deliberately — the opposite of run-ds-entrypoint.mount. An absent
+# config-drive means the session has no instructions and MUST fail closed; an
+# absent workspace disk just means a session with no repo, which is the ordinary
+# no-workspace boot (and every pre-dogfood session). So:
+#
+#   [Install] WantedBy=dev-disk-by\x2dlabel-DS_WORKSPACE.device
+#       The mount is pulled in by the DEVICE unit udev creates when — and only
+#       when — a disk with that label is actually attached. No disk, no device
+#       unit, no mount job, no failed unit, no delayed boot. This is why there is
+#       no ConditionPathExists: a condition on /dev/disk/by-label/... would race
+#       udev at early boot and could evaluate false on a session that DOES have a
+#       workspace.
+#
+#   ds-entrypoint.service carries `After=work.mount` (ordering only, no Requires).
+#       Ordering against a unit that is not in the transaction is a no-op, so on a
+#       no-workspace boot this costs nothing; on a workspace boot it guarantees
+#       /work is mounted before the runtime execs with WorkingDir=/work. Ordering
+#       WITHOUT a requirement is the point: a workspace that fails to mount must
+#       not take down a session that could still do useful work, it must show up
+#       as an empty /work and a failed unit the host can see.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[Unit]
+Description=Dream Serpent per-session workspace disk (dogfood)
+Documentation=https://github.com/dream-serpent/dream-serpent/blob/main/vm/m0-image/README.md
+# The runtime execs with its working directory here, so the mount must land first
+# when it is part of the boot at all (see the fail-open note above).
+Before=ds-entrypoint.service
+
+[Mount]
+What=/dev/disk/by-label/__WORKSPACE_LABEL__
+Where=__WORKSPACE_DIR__
+Type=__WORKSPACE_FS__
+# READ-WRITE (the agent edits here). nosuid,nodev: the workspace carries source,
+# never device nodes, and must never be a privilege-escalation carrier — a repo
+# that arrives with a setuid-root file must not be able to use it. NOT noexec:
+# builds produce binaries here and the whole point is to run the tests.
+Options=rw,nosuid,nodev
+
+[Install]
+# Pulled in by the device unit, so this is a no-op on a session with no workspace
+# disk attached. See the fail-open note above for why this is not WantedBy=
+# multi-user.target with a path condition.
+WantedBy=dev-disk-by\x2dlabel-__WORKSPACE_LABEL__.device

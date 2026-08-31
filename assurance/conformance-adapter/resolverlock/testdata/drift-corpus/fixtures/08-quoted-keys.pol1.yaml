@@ -1,0 +1,19 @@
+# drift class: the top-level `blocklist` key is quoted (`"blocklist":`).
+# named edge shape: quoted keys.
+# expected verdict (go, rust) = (reject, accept)
+# Go: ErrNoBlocklistSection — the line scanner tests `strings.HasPrefix(trimmed,
+#     "blocklist:")` on the raw (still-quoted) key, so `"blocklist":` is not
+#     recognized as the section opener and nothing is extracted.
+# Rust: parse_layer unquotes mapping keys (YamlNode::unquote), so `"blocklist":`
+#     binds the same field as `blocklist:` and the entry parses cleanly. A pack
+#     rewrite that quoted the key would silently empty the Go scanner while the
+#     Rust reader stayed authoritative — exactly the one-artifact-two-readers
+#     drift this corpus exists to surface.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+"blocklist":
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

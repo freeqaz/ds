@@ -1,0 +1,9 @@
+{
+  "_comment": "Synthetic VIOLATION (c): a requested permission ABSENT from the §5.2 inventory. The non-onboarding 'CI dispatch' flow requests deployments:write, which names no row of the inventory (the single anchor); a request may only name a permission the inventory records. Must FAIL with the named class permission-absent-from-inventory. The conforming triplet is left intact so this fixture isolates rule (c).",
+  "requested": [
+    { "permission": "contents:read",     "level": "read",  "flow": "onboarding CI-run-metadata read" },
+    { "permission": "actions:read",      "level": "read",  "flow": "onboarding CI-run-metadata read" },
+    { "permission": "metadata:read",     "level": "read",  "flow": "onboarding CI-run-metadata read" },
+    { "permission": "deployments:write", "level": "write", "flow": "CI dispatch (non-commit GitHub API calls)" }
+  ]
+}

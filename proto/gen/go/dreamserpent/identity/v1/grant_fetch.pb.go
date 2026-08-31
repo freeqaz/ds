@@ -1,0 +1,680 @@
+// The per-session grant-FETCH protocol — the M1/D55 swap rider deferred by
+// grants.proto (doc 16 §5.1/§5.2/§9; D39/D76/D8/D85).
+//
+// WHAT THIS IS. A new `GrantFetchService` with a single `Fetch` RPC and its
+// request/response messages, added to the already-FROZEN
+// `dreamserpent.identity.v1` package. Identity owns the grant model behind the
+// fetch — doc 16 §5.2/§9 grant-fetch row: "Identity owns the validation
+// semantics, the grant model behind the fetch, and the registry content" — so
+// the fetch seam is Identity's, in the same package that already holds the D22
+// `Validate` (validate.proto), the mint RPCs (ca_mint.proto), and the grant
+// RECORD (grants.proto). The sole listed consumer is the ds-tlsproxy SWAP
+// EXECUTOR (doc 16 §9 grant-fetch row: "Consumers: ds-tlsproxy swap executor";
+// doc 12 §13.3).
+//
+// ADDITIVE / BUF-SAFE — NOT a re-freeze, NOT a break. A new service + new
+// messages on a flipped package is buf-safe by construction — the exact path the
+// D111 Mint-RPC promotions and the grants.proto `GrantSet` promotion used (a new
+// service + new messages is additive where a field on a frozen message is not).
+// `buf breaking` against the pre-existing baseline passes (non-breaking); the
+// baseline is regenerated to the new state and the generated fakes re-emit to
+// cover `Fetch`. Per FREEZE.md the addition is still ONE-SHOT: a field missed at
+// promotion is a v2-package event, not a patch — so the message field-number
+// ranges below reserve generously for forward growth.
+//
+// PROVENANCE / TIMING. doc 16 §9 grant-fetch row schedules this "with the M1
+// credential-swap design (alongside the D55 Vault spec)" — i.e. now (M1).
+// grants.proto's own header explicitly defers the FETCH protocol to "the SEPARATE
+// M1/D55 rider," which is this seam; grants.proto carries only the grant RECORD
+// and the opaque, secret-free `grant_ref` this fetch keys on.
+//
+// FAITHFUL MIRROR. Every request/response field maps to a concrete element of
+// `identity/grant-service`: the RPC mirrors
+// `Service.Fetch(sessionUUID, serviceID, grantRef string, grantExpiry time.Time)
+// (Credential, error)` (service.go); `FetchedCredential{secret, location}`
+// mirrors `Credential{Secret []byte, Location string}` (backend.go); the
+// fail-closed grant_ref re-derivation mirrors `grantref.go`
+// grantRefMatches/ParseGrantRef + ErrGrantRefMismatch; the deliberate
+// stall-vs-deny error split mirrors backend.go ErrStoreUnavailable vs
+// ErrGrantNotFound plus service.go ErrSessionNotLive/errParkedSession. The one
+// place this proto INTENTIONALLY diverges from a literal Go transcription is
+// SCOPE: it exposes ONLY `Fetch` (not Suspend/Park/Resume/RegisterSession),
+// because doc 16 §9 scopes the seam to the per-session fetch and routes lifecycle
+// over other seams — see the OPEN-QUESTION DEFAULTS below. A later Go repoint of
+// `identity/grant-service` onto these generated types is a SEPARATE mechanical
+// follow-up; these generated types are unused until then (the M0 fakes-first
+// pattern, doc 05 OQ3).
+//
+// OPEN-QUESTION DEFAULTS (recorded here + in FREEZE.md/README for post-hoc
+// seam-owner confirmation; each chosen so a later change stays ADDITIVE):
+//   1. FETCH-ONLY / NO LIFECYCLE RPC. The Go `Service` also has
+//      Suspend/Park/Resume/RegisterSession (service.go), but doc 16 §9 scopes the
+//      SEAM to the per-session fetch only — the lifecycle transitions are driven
+//      by the consumed suspend signal / D46 park budget (doc 16 §10) and
+//      RegisterSession is fed by the mint sub-sequence (§6.1). DEFAULT:
+//      `GrantFetchService` exposes ONLY `Fetch`; lifecycle stays
+//      orchestrator-driven over existing seams (errParkedSession /
+//      ErrSessionNotLive surface as Fetch REASONS, not RPCs). Adding a lifecycle
+//      RPC later is additive (safe); a missed lifecycle FIELD on the Fetch
+//      messages would be a v2 event — hence the generous reservations below.
+//   2. IN-BAND MACHINE-READABLE REASON. The five Go errors ride an in-band
+//      `GrantFetchReason` enum field on `GrantFetchResponse` (field 5), mirroring
+//      validate.proto's in-band `ValidateResponse.machine_readable_reason`
+//      precedent, so the executor distinguishes a STALL (store down — retry) from
+//      a DENY (not-found / not-live — fail closed) on the wire. The alternative
+//      (pure gRPC status code + detail, no field) needs no reservation; picking
+//      the in-band shape is a field-reservation decision this freeze locks.
+//   3. grant_expiry REQUEST-INPUT + RESPONSE-ECHO. `grant_expiry` is both a
+//      request input (the caller already knows it from the preceding Validate
+//      ALLOW) and a response echo. The request field mirrors service.go (the
+//      caller passes grantExpiry; the store does not return it); the response
+//      echo is additive convenience so the response is self-contained. Kept as
+//      the impl-faithful default; not a blocker.
+
+// Code generated by protoc-gen-go. DO NOT EDIT.
+// versions:
+// 	protoc-gen-go v1.36.5
+// 	protoc        (unknown)
+// source: dreamserpent/identity/v1/grant_fetch.proto
+
+package identityv1
+
+import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	reflect "reflect"
+	sync "sync"
+	unsafe "unsafe"
+)
+
+const (
+	// Verify that this generated code is sufficiently up-to-date.
+	_ = protoimpl.EnforceVersion(20 - protoimpl.MinVersion)
+	// Verify that runtime/protoimpl is sufficiently up-to-date.
+	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
+)
+
+// CredentialClass is the doc 16 §2/§7 swap-vs-inject class of a fetched
+// credential. The seam is class-aware from M1 even though the OSS file fake is
+// swap-class-only (backend.go holds "the REAL swap-class credential keyed by
+// grant_ref"). Grounded in doc 16 §2/§7; mirrors the GrantScope `_UNSPECIFIED`
+// enum-zero discipline in grants.proto.
+type CredentialClass int32
+
+const (
+	// The proto3 zero value, buf-STANDARD. A never-set class is distinguishable
+	// from a deliberate choice — treating UNSPECIFIED as swap-class is a
+	// caller-internal policy, never a wire default (mirrors GrantScope's
+	// `_UNSPECIFIED` discipline).
+	CredentialClass_CREDENTIAL_CLASS_UNSPECIFIED CredentialClass = 0
+	// SWAP-class: never enters the VM; header-substitutable at TLS-5; the D8 promise
+	// covers it in full (doc 16 §2). The OSS local store holds swap-class
+	// credentials (backend.go).
+	CredentialClass_CREDENTIAL_CLASS_SWAP CredentialClass = 1
+	// INJECT-class: STS-style short-lived credentials passed into the environment,
+	// bounded by TTL + the ISSUED{service_id} digest (doc 16 §2/§7).
+	CredentialClass_CREDENTIAL_CLASS_INJECT CredentialClass = 2
+)
+
+// Enum value maps for CredentialClass.
+var (
+	CredentialClass_name = map[int32]string{
+		0: "CREDENTIAL_CLASS_UNSPECIFIED",
+		1: "CREDENTIAL_CLASS_SWAP",
+		2: "CREDENTIAL_CLASS_INJECT",
+	}
+	CredentialClass_value = map[string]int32{
+		"CREDENTIAL_CLASS_UNSPECIFIED": 0,
+		"CREDENTIAL_CLASS_SWAP":        1,
+		"CREDENTIAL_CLASS_INJECT":      2,
+	}
+)
+
+func (x CredentialClass) Enum() *CredentialClass {
+	p := new(CredentialClass)
+	*p = x
+	return p
+}
+
+func (x CredentialClass) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CredentialClass) Descriptor() protoreflect.EnumDescriptor {
+	return file_dreamserpent_identity_v1_grant_fetch_proto_enumTypes[0].Descriptor()
+}
+
+func (CredentialClass) Type() protoreflect.EnumType {
+	return &file_dreamserpent_identity_v1_grant_fetch_proto_enumTypes[0]
+}
+
+func (x CredentialClass) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CredentialClass.Descriptor instead.
+func (CredentialClass) EnumDescriptor() ([]byte, []int) {
+	return file_dreamserpent_identity_v1_grant_fetch_proto_rawDescGZIP(), []int{0}
+}
+
+// GrantFetchReason is the in-band machine-readable outcome of a `Fetch`
+// (open-question default #2; mirrors validate.proto's in-band
+// `ValidateResponse.machine_readable_reason`). It carries the five Go errors so
+// the executor distinguishes a STALL (retry) from a DENY (fail closed) on the
+// wire — preserving backend.go's deliberate ErrStoreUnavailable-vs-ErrGrantNotFound
+// split (§5.1).
+type GrantFetchReason int32
+
+const (
+	// The proto3 zero value, buf-STANDARD. NOT a success signal — success is
+	// determined by a populated `credential`; UNSPECIFIED is the never-set default
+	// a caller must distinguish from a deliberate reason (mirrors the GrantScope /
+	// ValidateVerdict `_UNSPECIFIED` discipline).
+	GrantFetchReason_GRANT_FETCH_REASON_UNSPECIFIED GrantFetchReason = 0
+	// OK: the fetch succeeded; `credential` is populated. Carried explicitly so a
+	// success is a deliberate value, not the inferred absence of an error.
+	GrantFetchReason_GRANT_FETCH_REASON_OK GrantFetchReason = 1
+	// STALL (RETRYABLE): the D39 key store is unreachable — a NEW fetch stalls
+	// (only NEW fetches; a cached grant rides its cache). The executor RETRIES;
+	// it does NOT fail closed. Mirrors backend.go `ErrStoreUnavailable` — the §5.1
+	// availability dependency.
+	GrantFetchReason_GRANT_FETCH_REASON_STORE_UNAVAILABLE GrantFetchReason = 2
+	// DENY: no credential is stored for the grant_ref — a definitive deny, NOT a
+	// stall. The executor FAILS CLOSED. Mirrors backend.go `ErrGrantNotFound`.
+	GrantFetchReason_GRANT_FETCH_REASON_GRANT_NOT_FOUND GrantFetchReason = 3
+	// DENY: the session is suspended or unknown — fail-closed, no live session ⇒ no
+	// fetch. Mirrors service.go `ErrSessionNotLive`.
+	GrantFetchReason_GRANT_FETCH_REASON_SESSION_NOT_LIVE GrantFetchReason = 4
+	// DENY (PARKED): the session is parked and does not fetch NEW grants (it may
+	// only ride what it cached pre-park; a new fetch resumes only after Resume
+	// re-validates liveness). Mirrors service.go `errParkedSession`.
+	GrantFetchReason_GRANT_FETCH_REASON_SESSION_PARKED GrantFetchReason = 5
+	// DENY: the presented grant_ref is not the contract handle for exactly this
+	// (session, service) binding — the reader-side fail-closed of the §9 GrantRef
+	// contract. Mirrors service.go/grantref.go `ErrGrantRefMismatch`.
+	GrantFetchReason_GRANT_FETCH_REASON_GRANT_REF_MISMATCH GrantFetchReason = 6
+)
+
+// Enum value maps for GrantFetchReason.
+var (
+	GrantFetchReason_name = map[int32]string{
+		0: "GRANT_FETCH_REASON_UNSPECIFIED",
+		1: "GRANT_FETCH_REASON_OK",
+		2: "GRANT_FETCH_REASON_STORE_UNAVAILABLE",
+		3: "GRANT_FETCH_REASON_GRANT_NOT_FOUND",
+		4: "GRANT_FETCH_REASON_SESSION_NOT_LIVE",
+		5: "GRANT_FETCH_REASON_SESSION_PARKED",
+		6: "GRANT_FETCH_REASON_GRANT_REF_MISMATCH",
+	}
+	GrantFetchReason_value = map[string]int32{
+		"GRANT_FETCH_REASON_UNSPECIFIED":        0,
+		"GRANT_FETCH_REASON_OK":                 1,
+		"GRANT_FETCH_REASON_STORE_UNAVAILABLE":  2,
+		"GRANT_FETCH_REASON_GRANT_NOT_FOUND":    3,
+		"GRANT_FETCH_REASON_SESSION_NOT_LIVE":   4,
+		"GRANT_FETCH_REASON_SESSION_PARKED":     5,
+		"GRANT_FETCH_REASON_GRANT_REF_MISMATCH": 6,
+	}
+)
+
+func (x GrantFetchReason) Enum() *GrantFetchReason {
+	p := new(GrantFetchReason)
+	*p = x
+	return p
+}
+
+func (x GrantFetchReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (GrantFetchReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_dreamserpent_identity_v1_grant_fetch_proto_enumTypes[1].Descriptor()
+}
+
+func (GrantFetchReason) Type() protoreflect.EnumType {
+	return &file_dreamserpent_identity_v1_grant_fetch_proto_enumTypes[1]
+}
+
+func (x GrantFetchReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use GrantFetchReason.Descriptor instead.
+func (GrantFetchReason) EnumDescriptor() ([]byte, []int) {
+	return file_dreamserpent_identity_v1_grant_fetch_proto_rawDescGZIP(), []int{1}
+}
+
+// GrantFetchRequest is the swap executor's per-session fetch (doc 16 §5.1/§9).
+// It mirrors the `Service.Fetch(sessionUUID, serviceID, grantRef, grantExpiry)`
+// arguments (service.go) field-for-field.
+type GrantFetchRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The session whose grant is fetched — the identity-plane join key. Mirrors the
+	// `sessionUUID` argument. Carried as a BARE STRING to mirror the Go model (the
+	// grant service keys its in-memory session store on this UUID; grants.proto
+	// `MintGrantsRequest.session_uuid` set the same string precedent). A later
+	// additive `dreamserpent.boundary.v1.SessionRef session_ref` join (the
+	// validate.proto / ca_mint.proto convention) can land under the reserved
+	// 16..19 slot below without a break.
+	SessionUuid string `protobuf:"bytes,1,opt,name=session_uuid,json=sessionUuid,proto3" json:"session_uuid,omitempty"`
+	// The `services[]` registry key being swapped (e.g. "github") — keys the store
+	// lookup. Mirrors the `serviceID` argument; the same field as
+	// grants.proto `Grant.service_id` / validate.proto `ValidateRequest.service_id`.
+	ServiceId string `protobuf:"bytes,2,opt,name=service_id,json=serviceId,proto3" json:"service_id,omitempty"`
+	// The opaque, secret-free contract handle `grant:<session_uuid>:<service_id>`
+	// the executor received from the Validate ALLOW
+	// (validate.proto `ValidateResponse.grant_ref`) / grant record
+	// (grants.proto `Grant.grant_ref`). The reader side re-derives (session,
+	// service) from it and FAIL-CLOSED rejects any ref that does not parse to
+	// exactly this binding — the `grantRefMatches` / `ErrGrantRefMismatch` guard in
+	// service.go / grantref.go (surfaces as REASON_GRANT_REF_MISMATCH). It NEVER
+	// carries secret material — only a reference (grants.proto), so the handle that
+	// keys the fetch carries no credential into the VM. Mirrors the `grantRef`
+	// argument.
+	GrantRef string `protobuf:"bytes,3,opt,name=grant_ref,json=grantRef,proto3" json:"grant_ref,omitempty"`
+	// The grant TTL horizon the executor already learned from the preceding Validate
+	// ALLOW (validate.proto `ValidateResponse.expiry_unix_seconds`) and the grant
+	// record (grants.proto `Grant.expiry_unix_seconds`). Carried into the request so
+	// caller and service agree on the cache ceiling; it bounds the executor-side
+	// cache entry alongside the session deadline (service.go expiry clamp). Mirrors
+	// the `grantExpiry time.Time` argument. Wall-clock UNIX seconds — the
+	// ca_mint/grants/validate house convention; a freeze-window swap to
+	// google.protobuf.Timestamp would be additive and wire-compatible.
+	GrantExpiryUnixSeconds int64 `protobuf:"varint,4,opt,name=grant_expiry_unix_seconds,json=grantExpiryUnixSeconds,proto3" json:"grant_expiry_unix_seconds,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *GrantFetchRequest) Reset() {
+	*x = GrantFetchRequest{}
+	mi := &file_dreamserpent_identity_v1_grant_fetch_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GrantFetchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GrantFetchRequest) ProtoMessage() {}
+
+func (x *GrantFetchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dreamserpent_identity_v1_grant_fetch_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GrantFetchRequest.ProtoReflect.Descriptor instead.
+func (*GrantFetchRequest) Descriptor() ([]byte, []int) {
+	return file_dreamserpent_identity_v1_grant_fetch_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *GrantFetchRequest) GetSessionUuid() string {
+	if x != nil {
+		return x.SessionUuid
+	}
+	return ""
+}
+
+func (x *GrantFetchRequest) GetServiceId() string {
+	if x != nil {
+		return x.ServiceId
+	}
+	return ""
+}
+
+func (x *GrantFetchRequest) GetGrantRef() string {
+	if x != nil {
+		return x.GrantRef
+	}
+	return ""
+}
+
+func (x *GrantFetchRequest) GetGrantExpiryUnixSeconds() int64 {
+	if x != nil {
+		return x.GrantExpiryUnixSeconds
+	}
+	return 0
+}
+
+// FetchedCredential is the REAL credential material the swap executor
+// substitutes. It mirrors `Credential{Secret []byte, Location string}`
+// (backend.go) field-for-field. SECURITY-CRITICAL: this is the real credential
+// (doc 16 §5.2); it crosses ONLY to the off-VM swap executor — see
+// GrantFetchResponse.credential for the D8/D39 delivery model.
+type FetchedCredential struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The credential material the swap executor substitutes VERBATIM (e.g. a PAT) —
+	// mirrors `Credential.Secret []byte`. Opaque bytes: credential-type-agnostic
+	// (D83 generic header-swap seam); the grant service never interprets it.
+	Secret []byte `protobuf:"bytes,1,opt,name=secret,proto3" json:"secret,omitempty"`
+	// Where the swap substitutes it ("Authorization" by default, the frozen generic
+	// header seam D83) — mirrors `Credential.Location` and grants.proto
+	// `ServiceRegistryEntry.credential_location`. Carried for the executor's
+	// convenience; the grant service does not interpret it.
+	Location      string `protobuf:"bytes,2,opt,name=location,proto3" json:"location,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FetchedCredential) Reset() {
+	*x = FetchedCredential{}
+	mi := &file_dreamserpent_identity_v1_grant_fetch_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FetchedCredential) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FetchedCredential) ProtoMessage() {}
+
+func (x *FetchedCredential) ProtoReflect() protoreflect.Message {
+	mi := &file_dreamserpent_identity_v1_grant_fetch_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FetchedCredential.ProtoReflect.Descriptor instead.
+func (*FetchedCredential) Descriptor() ([]byte, []int) {
+	return file_dreamserpent_identity_v1_grant_fetch_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *FetchedCredential) GetSecret() []byte {
+	if x != nil {
+		return x.Secret
+	}
+	return nil
+}
+
+func (x *FetchedCredential) GetLocation() string {
+	if x != nil {
+		return x.Location
+	}
+	return ""
+}
+
+// GrantFetchResponse is the `Fetch` result (doc 16 §5.1/§5.2/§9). On success it
+// carries the REAL credential plus its class and the ISSUED{service_id} binding;
+// on failure it carries a distinct `reason` (open-question default #2).
+//
+// DELIVERY MODEL (D8/D39). WHAT crosses: the real credential material
+// (`credential.secret` + `credential.location`), its `credential_class`, and the
+// ISSUED{service_id} binding. TO WHOM: ONLY the off-VM ds-tlsproxy swap executor,
+// which substitutes the secret into the upstream Authorization header (TLS-5:
+// registry match → Validate → fetch the real credential OUTSIDE the boundary →
+// substitute upstream → scrub both creds → CredentialUseEvent, doc 12 §13.3 /
+// doc 16 §5.2) and scrubs it from every log path. WHY this honors D8
+// (cred-never-in-VM): the credential is fetched by and delivered to a component
+// OUTSIDE the VM trust boundary; the VM (and the agent) only ever see the request
+// RESULT — a header on an upstream request that has already left the VM via the
+// proxy — never the secret bytes. The off-host grant service holds the plaintext
+// in memory for at most the session (service.go sessionCache, ≤ session deadline;
+// the bounded D76 exposure); the long-lived store credential never leaves the D39
+// trust zone (backend.go). The seam returns the real credential precisely because
+// its only client is already outside the VM — the same structural justification
+// validate.proto/ca_mint.proto use to return real CA key material proxy-bound:
+// the boundary-side recipient is not the agent.
+type GrantFetchResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The REAL credential material, populated ONLY on success
+	// (reason == GRANT_FETCH_REASON_OK). The security-critical field; see the
+	// message-level delivery-model comment. Mirrors the `Credential` return of
+	// `Service.Fetch`.
+	Credential *FetchedCredential `protobuf:"bytes,1,opt,name=credential,proto3" json:"credential,omitempty"`
+	// SWAP-class | INJECT-class (doc 16 §2/§7), so the executor knows whether to
+	// header-substitute (swap-class, the D8-covered TLS-5 path, never enters the
+	// VM) or inject into the environment (inject-class, STS-style, bounded by TTL +
+	// the ISSUED digest). Carried so the seam is class-aware from M1 even though the
+	// OSS file fake is swap-class-only (backend.go).
+	CredentialClass CredentialClass `protobuf:"varint,2,opt,name=credential_class,json=credentialClass,proto3,enum=dreamserpent.identity.v1.CredentialClass" json:"credential_class,omitempty"`
+	// The ISSUED{service_id} binding echoed back as a grant FACT
+	// (grants.proto `Grant.cred_class_digest_tag` = "ISSUED{" + service_id + "}";
+	// doc 16 §5.1/§6/§11.1 step 7). Lets the executor/boundary confirm the fetched
+	// credential is bound to exactly the service being swapped (the
+	// wrong-destination block) and ties the swap to the digest the producer
+	// registered. This echoes the request `service_id`; the field name records that
+	// it is the ISSUED binding, not a free re-statement.
+	IssuedServiceId string `protobuf:"bytes,3,opt,name=issued_service_id,json=issuedServiceId,proto3" json:"issued_service_id,omitempty"`
+	// The authoritative TTL the executor caches against, re-stated from the
+	// store/grant so the response is self-contained (open-question default #3). The
+	// cache lives ≤ min(this, session deadline), mirroring service.go's expiry
+	// clamp. Wall-clock UNIX seconds; a freeze-window swap to
+	// google.protobuf.Timestamp would be additive and wire-compatible.
+	GrantExpiryUnixSeconds int64 `protobuf:"varint,4,opt,name=grant_expiry_unix_seconds,json=grantExpiryUnixSeconds,proto3" json:"grant_expiry_unix_seconds,omitempty"`
+	// The in-band machine-readable outcome (open-question default #2). On success
+	// it is GRANT_FETCH_REASON_OK and `credential` is populated; on failure it is
+	// the distinct deny/stall reason and `credential` is empty, so the executor
+	// RETRIES a stall (REASON_STORE_UNAVAILABLE) but FAILS CLOSED on a deny
+	// (§5.1). Mirrors validate.proto's in-band
+	// `ValidateResponse.machine_readable_reason` precedent.
+	Reason        GrantFetchReason `protobuf:"varint,5,opt,name=reason,proto3,enum=dreamserpent.identity.v1.GrantFetchReason" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GrantFetchResponse) Reset() {
+	*x = GrantFetchResponse{}
+	mi := &file_dreamserpent_identity_v1_grant_fetch_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GrantFetchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GrantFetchResponse) ProtoMessage() {}
+
+func (x *GrantFetchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dreamserpent_identity_v1_grant_fetch_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GrantFetchResponse.ProtoReflect.Descriptor instead.
+func (*GrantFetchResponse) Descriptor() ([]byte, []int) {
+	return file_dreamserpent_identity_v1_grant_fetch_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *GrantFetchResponse) GetCredential() *FetchedCredential {
+	if x != nil {
+		return x.Credential
+	}
+	return nil
+}
+
+func (x *GrantFetchResponse) GetCredentialClass() CredentialClass {
+	if x != nil {
+		return x.CredentialClass
+	}
+	return CredentialClass_CREDENTIAL_CLASS_UNSPECIFIED
+}
+
+func (x *GrantFetchResponse) GetIssuedServiceId() string {
+	if x != nil {
+		return x.IssuedServiceId
+	}
+	return ""
+}
+
+func (x *GrantFetchResponse) GetGrantExpiryUnixSeconds() int64 {
+	if x != nil {
+		return x.GrantExpiryUnixSeconds
+	}
+	return 0
+}
+
+func (x *GrantFetchResponse) GetReason() GrantFetchReason {
+	if x != nil {
+		return x.Reason
+	}
+	return GrantFetchReason_GRANT_FETCH_REASON_UNSPECIFIED
+}
+
+var File_dreamserpent_identity_v1_grant_fetch_proto protoreflect.FileDescriptor
+
+var file_dreamserpent_identity_v1_grant_fetch_proto_rawDesc = string([]byte{
+	0x0a, 0x2a, 0x64, 0x72, 0x65, 0x61, 0x6d, 0x73, 0x65, 0x72, 0x70, 0x65, 0x6e, 0x74, 0x2f, 0x69,
+	0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x2f, 0x76, 0x31, 0x2f, 0x67, 0x72, 0x61, 0x6e, 0x74,
+	0x5f, 0x66, 0x65, 0x74, 0x63, 0x68, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x12, 0x18, 0x64, 0x72,
+	0x65, 0x61, 0x6d, 0x73, 0x65, 0x72, 0x70, 0x65, 0x6e, 0x74, 0x2e, 0x69, 0x64, 0x65, 0x6e, 0x74,
+	0x69, 0x74, 0x79, 0x2e, 0x76, 0x31, 0x22, 0xb9, 0x01, 0x0a, 0x11, 0x47, 0x72, 0x61, 0x6e, 0x74,
+	0x46, 0x65, 0x74, 0x63, 0x68, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x21, 0x0a, 0x0c,
+	0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x5f, 0x75, 0x75, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x0b, 0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x55, 0x75, 0x69, 0x64, 0x12,
+	0x1d, 0x0a, 0x0a, 0x73, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x09, 0x73, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x49, 0x64, 0x12, 0x1b,
+	0x0a, 0x09, 0x67, 0x72, 0x61, 0x6e, 0x74, 0x5f, 0x72, 0x65, 0x66, 0x18, 0x03, 0x20, 0x01, 0x28,
+	0x09, 0x52, 0x08, 0x67, 0x72, 0x61, 0x6e, 0x74, 0x52, 0x65, 0x66, 0x12, 0x39, 0x0a, 0x19, 0x67,
+	0x72, 0x61, 0x6e, 0x74, 0x5f, 0x65, 0x78, 0x70, 0x69, 0x72, 0x79, 0x5f, 0x75, 0x6e, 0x69, 0x78,
+	0x5f, 0x73, 0x65, 0x63, 0x6f, 0x6e, 0x64, 0x73, 0x18, 0x04, 0x20, 0x01, 0x28, 0x03, 0x52, 0x16,
+	0x67, 0x72, 0x61, 0x6e, 0x74, 0x45, 0x78, 0x70, 0x69, 0x72, 0x79, 0x55, 0x6e, 0x69, 0x78, 0x53,
+	0x65, 0x63, 0x6f, 0x6e, 0x64, 0x73, 0x4a, 0x04, 0x08, 0x05, 0x10, 0x10, 0x4a, 0x04, 0x08, 0x10,
+	0x10, 0x14, 0x22, 0x4d, 0x0a, 0x11, 0x46, 0x65, 0x74, 0x63, 0x68, 0x65, 0x64, 0x43, 0x72, 0x65,
+	0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x12, 0x16, 0x0a, 0x06, 0x73, 0x65, 0x63, 0x72, 0x65,
+	0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x06, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x12,
+	0x1a, 0x0a, 0x08, 0x6c, 0x6f, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28,
+	0x09, 0x52, 0x08, 0x6c, 0x6f, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x4a, 0x04, 0x08, 0x03, 0x10,
+	0x10, 0x22, 0xee, 0x02, 0x0a, 0x12, 0x47, 0x72, 0x61, 0x6e, 0x74, 0x46, 0x65, 0x74, 0x63, 0x68,
+	0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x4b, 0x0a, 0x0a, 0x63, 0x72, 0x65, 0x64,
+	0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x2b, 0x2e, 0x64,
+	0x72, 0x65, 0x61, 0x6d, 0x73, 0x65, 0x72, 0x70, 0x65, 0x6e, 0x74, 0x2e, 0x69, 0x64, 0x65, 0x6e,
+	0x74, 0x69, 0x74, 0x79, 0x2e, 0x76, 0x31, 0x2e, 0x46, 0x65, 0x74, 0x63, 0x68, 0x65, 0x64, 0x43,
+	0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x52, 0x0a, 0x63, 0x72, 0x65, 0x64, 0x65,
+	0x6e, 0x74, 0x69, 0x61, 0x6c, 0x12, 0x54, 0x0a, 0x10, 0x63, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74,
+	0x69, 0x61, 0x6c, 0x5f, 0x63, 0x6c, 0x61, 0x73, 0x73, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0e, 0x32,
+	0x29, 0x2e, 0x64, 0x72, 0x65, 0x61, 0x6d, 0x73, 0x65, 0x72, 0x70, 0x65, 0x6e, 0x74, 0x2e, 0x69,
+	0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x2e, 0x76, 0x31, 0x2e, 0x43, 0x72, 0x65, 0x64, 0x65,
+	0x6e, 0x74, 0x69, 0x61, 0x6c, 0x43, 0x6c, 0x61, 0x73, 0x73, 0x52, 0x0f, 0x63, 0x72, 0x65, 0x64,
+	0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x43, 0x6c, 0x61, 0x73, 0x73, 0x12, 0x2a, 0x0a, 0x11, 0x69,
+	0x73, 0x73, 0x75, 0x65, 0x64, 0x5f, 0x73, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x5f, 0x69, 0x64,
+	0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0f, 0x69, 0x73, 0x73, 0x75, 0x65, 0x64, 0x53, 0x65,
+	0x72, 0x76, 0x69, 0x63, 0x65, 0x49, 0x64, 0x12, 0x39, 0x0a, 0x19, 0x67, 0x72, 0x61, 0x6e, 0x74,
+	0x5f, 0x65, 0x78, 0x70, 0x69, 0x72, 0x79, 0x5f, 0x75, 0x6e, 0x69, 0x78, 0x5f, 0x73, 0x65, 0x63,
+	0x6f, 0x6e, 0x64, 0x73, 0x18, 0x04, 0x20, 0x01, 0x28, 0x03, 0x52, 0x16, 0x67, 0x72, 0x61, 0x6e,
+	0x74, 0x45, 0x78, 0x70, 0x69, 0x72, 0x79, 0x55, 0x6e, 0x69, 0x78, 0x53, 0x65, 0x63, 0x6f, 0x6e,
+	0x64, 0x73, 0x12, 0x42, 0x0a, 0x06, 0x72, 0x65, 0x61, 0x73, 0x6f, 0x6e, 0x18, 0x05, 0x20, 0x01,
+	0x28, 0x0e, 0x32, 0x2a, 0x2e, 0x64, 0x72, 0x65, 0x61, 0x6d, 0x73, 0x65, 0x72, 0x70, 0x65, 0x6e,
+	0x74, 0x2e, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x2e, 0x76, 0x31, 0x2e, 0x47, 0x72,
+	0x61, 0x6e, 0x74, 0x46, 0x65, 0x74, 0x63, 0x68, 0x52, 0x65, 0x61, 0x73, 0x6f, 0x6e, 0x52, 0x06,
+	0x72, 0x65, 0x61, 0x73, 0x6f, 0x6e, 0x4a, 0x04, 0x08, 0x06, 0x10, 0x10, 0x4a, 0x04, 0x08, 0x10,
+	0x10, 0x14, 0x2a, 0x71, 0x0a, 0x0f, 0x43, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c,
+	0x43, 0x6c, 0x61, 0x73, 0x73, 0x12, 0x20, 0x0a, 0x1c, 0x43, 0x52, 0x45, 0x44, 0x45, 0x4e, 0x54,
+	0x49, 0x41, 0x4c, 0x5f, 0x43, 0x4c, 0x41, 0x53, 0x53, 0x5f, 0x55, 0x4e, 0x53, 0x50, 0x45, 0x43,
+	0x49, 0x46, 0x49, 0x45, 0x44, 0x10, 0x00, 0x12, 0x19, 0x0a, 0x15, 0x43, 0x52, 0x45, 0x44, 0x45,
+	0x4e, 0x54, 0x49, 0x41, 0x4c, 0x5f, 0x43, 0x4c, 0x41, 0x53, 0x53, 0x5f, 0x53, 0x57, 0x41, 0x50,
+	0x10, 0x01, 0x12, 0x1b, 0x0a, 0x17, 0x43, 0x52, 0x45, 0x44, 0x45, 0x4e, 0x54, 0x49, 0x41, 0x4c,
+	0x5f, 0x43, 0x4c, 0x41, 0x53, 0x53, 0x5f, 0x49, 0x4e, 0x4a, 0x45, 0x43, 0x54, 0x10, 0x02, 0x22,
+	0x04, 0x08, 0x03, 0x10, 0x0f, 0x2a, 0xa4, 0x02, 0x0a, 0x10, 0x47, 0x72, 0x61, 0x6e, 0x74, 0x46,
+	0x65, 0x74, 0x63, 0x68, 0x52, 0x65, 0x61, 0x73, 0x6f, 0x6e, 0x12, 0x22, 0x0a, 0x1e, 0x47, 0x52,
+	0x41, 0x4e, 0x54, 0x5f, 0x46, 0x45, 0x54, 0x43, 0x48, 0x5f, 0x52, 0x45, 0x41, 0x53, 0x4f, 0x4e,
+	0x5f, 0x55, 0x4e, 0x53, 0x50, 0x45, 0x43, 0x49, 0x46, 0x49, 0x45, 0x44, 0x10, 0x00, 0x12, 0x19,
+	0x0a, 0x15, 0x47, 0x52, 0x41, 0x4e, 0x54, 0x5f, 0x46, 0x45, 0x54, 0x43, 0x48, 0x5f, 0x52, 0x45,
+	0x41, 0x53, 0x4f, 0x4e, 0x5f, 0x4f, 0x4b, 0x10, 0x01, 0x12, 0x28, 0x0a, 0x24, 0x47, 0x52, 0x41,
+	0x4e, 0x54, 0x5f, 0x46, 0x45, 0x54, 0x43, 0x48, 0x5f, 0x52, 0x45, 0x41, 0x53, 0x4f, 0x4e, 0x5f,
+	0x53, 0x54, 0x4f, 0x52, 0x45, 0x5f, 0x55, 0x4e, 0x41, 0x56, 0x41, 0x49, 0x4c, 0x41, 0x42, 0x4c,
+	0x45, 0x10, 0x02, 0x12, 0x26, 0x0a, 0x22, 0x47, 0x52, 0x41, 0x4e, 0x54, 0x5f, 0x46, 0x45, 0x54,
+	0x43, 0x48, 0x5f, 0x52, 0x45, 0x41, 0x53, 0x4f, 0x4e, 0x5f, 0x47, 0x52, 0x41, 0x4e, 0x54, 0x5f,
+	0x4e, 0x4f, 0x54, 0x5f, 0x46, 0x4f, 0x55, 0x4e, 0x44, 0x10, 0x03, 0x12, 0x27, 0x0a, 0x23, 0x47,
+	0x52, 0x41, 0x4e, 0x54, 0x5f, 0x46, 0x45, 0x54, 0x43, 0x48, 0x5f, 0x52, 0x45, 0x41, 0x53, 0x4f,
+	0x4e, 0x5f, 0x53, 0x45, 0x53, 0x53, 0x49, 0x4f, 0x4e, 0x5f, 0x4e, 0x4f, 0x54, 0x5f, 0x4c, 0x49,
+	0x56, 0x45, 0x10, 0x04, 0x12, 0x25, 0x0a, 0x21, 0x47, 0x52, 0x41, 0x4e, 0x54, 0x5f, 0x46, 0x45,
+	0x54, 0x43, 0x48, 0x5f, 0x52, 0x45, 0x41, 0x53, 0x4f, 0x4e, 0x5f, 0x53, 0x45, 0x53, 0x53, 0x49,
+	0x4f, 0x4e, 0x5f, 0x50, 0x41, 0x52, 0x4b, 0x45, 0x44, 0x10, 0x05, 0x12, 0x29, 0x0a, 0x25, 0x47,
+	0x52, 0x41, 0x4e, 0x54, 0x5f, 0x46, 0x45, 0x54, 0x43, 0x48, 0x5f, 0x52, 0x45, 0x41, 0x53, 0x4f,
+	0x4e, 0x5f, 0x47, 0x52, 0x41, 0x4e, 0x54, 0x5f, 0x52, 0x45, 0x46, 0x5f, 0x4d, 0x49, 0x53, 0x4d,
+	0x41, 0x54, 0x43, 0x48, 0x10, 0x06, 0x22, 0x04, 0x08, 0x07, 0x10, 0x1f, 0x32, 0x77, 0x0a, 0x11,
+	0x47, 0x72, 0x61, 0x6e, 0x74, 0x46, 0x65, 0x74, 0x63, 0x68, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63,
+	0x65, 0x12, 0x62, 0x0a, 0x05, 0x46, 0x65, 0x74, 0x63, 0x68, 0x12, 0x2b, 0x2e, 0x64, 0x72, 0x65,
+	0x61, 0x6d, 0x73, 0x65, 0x72, 0x70, 0x65, 0x6e, 0x74, 0x2e, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x69,
+	0x74, 0x79, 0x2e, 0x76, 0x31, 0x2e, 0x47, 0x72, 0x61, 0x6e, 0x74, 0x46, 0x65, 0x74, 0x63, 0x68,
+	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x2c, 0x2e, 0x64, 0x72, 0x65, 0x61, 0x6d, 0x73,
+	0x65, 0x72, 0x70, 0x65, 0x6e, 0x74, 0x2e, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x2e,
+	0x76, 0x31, 0x2e, 0x47, 0x72, 0x61, 0x6e, 0x74, 0x46, 0x65, 0x74, 0x63, 0x68, 0x52, 0x65, 0x73,
+	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x42, 0x59, 0x5a, 0x57, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e,
+	0x63, 0x6f, 0x6d, 0x2f, 0x64, 0x72, 0x65, 0x61, 0x6d, 0x2d, 0x73, 0x65, 0x72, 0x70, 0x65, 0x6e,
+	0x74, 0x2f, 0x64, 0x72, 0x65, 0x61, 0x6d, 0x2d, 0x73, 0x65, 0x72, 0x70, 0x65, 0x6e, 0x74, 0x2f,
+	0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x67, 0x65, 0x6e, 0x2f, 0x67, 0x6f, 0x2f, 0x64, 0x72, 0x65,
+	0x61, 0x6d, 0x73, 0x65, 0x72, 0x70, 0x65, 0x6e, 0x74, 0x2f, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x69,
+	0x74, 0x79, 0x2f, 0x76, 0x31, 0x3b, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x76, 0x31,
+	0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+})
+
+var (
+	file_dreamserpent_identity_v1_grant_fetch_proto_rawDescOnce sync.Once
+	file_dreamserpent_identity_v1_grant_fetch_proto_rawDescData []byte
+)
+
+func file_dreamserpent_identity_v1_grant_fetch_proto_rawDescGZIP() []byte {
+	file_dreamserpent_identity_v1_grant_fetch_proto_rawDescOnce.Do(func() {
+		file_dreamserpent_identity_v1_grant_fetch_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_dreamserpent_identity_v1_grant_fetch_proto_rawDesc), len(file_dreamserpent_identity_v1_grant_fetch_proto_rawDesc)))
+	})
+	return file_dreamserpent_identity_v1_grant_fetch_proto_rawDescData
+}
+
+var file_dreamserpent_identity_v1_grant_fetch_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_dreamserpent_identity_v1_grant_fetch_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_dreamserpent_identity_v1_grant_fetch_proto_goTypes = []any{
+	(CredentialClass)(0),       // 0: dreamserpent.identity.v1.CredentialClass
+	(GrantFetchReason)(0),      // 1: dreamserpent.identity.v1.GrantFetchReason
+	(*GrantFetchRequest)(nil),  // 2: dreamserpent.identity.v1.GrantFetchRequest
+	(*FetchedCredential)(nil),  // 3: dreamserpent.identity.v1.FetchedCredential
+	(*GrantFetchResponse)(nil), // 4: dreamserpent.identity.v1.GrantFetchResponse
+}
+var file_dreamserpent_identity_v1_grant_fetch_proto_depIdxs = []int32{
+	3, // 0: dreamserpent.identity.v1.GrantFetchResponse.credential:type_name -> dreamserpent.identity.v1.FetchedCredential
+	0, // 1: dreamserpent.identity.v1.GrantFetchResponse.credential_class:type_name -> dreamserpent.identity.v1.CredentialClass
+	1, // 2: dreamserpent.identity.v1.GrantFetchResponse.reason:type_name -> dreamserpent.identity.v1.GrantFetchReason
+	2, // 3: dreamserpent.identity.v1.GrantFetchService.Fetch:input_type -> dreamserpent.identity.v1.GrantFetchRequest
+	4, // 4: dreamserpent.identity.v1.GrantFetchService.Fetch:output_type -> dreamserpent.identity.v1.GrantFetchResponse
+	4, // [4:5] is the sub-list for method output_type
+	3, // [3:4] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
+}
+
+func init() { file_dreamserpent_identity_v1_grant_fetch_proto_init() }
+func file_dreamserpent_identity_v1_grant_fetch_proto_init() {
+	if File_dreamserpent_identity_v1_grant_fetch_proto != nil {
+		return
+	}
+	type x struct{}
+	out := protoimpl.TypeBuilder{
+		File: protoimpl.DescBuilder{
+			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dreamserpent_identity_v1_grant_fetch_proto_rawDesc), len(file_dreamserpent_identity_v1_grant_fetch_proto_rawDesc)),
+			NumEnums:      2,
+			NumMessages:   3,
+			NumExtensions: 0,
+			NumServices:   1,
+		},
+		GoTypes:           file_dreamserpent_identity_v1_grant_fetch_proto_goTypes,
+		DependencyIndexes: file_dreamserpent_identity_v1_grant_fetch_proto_depIdxs,
+		EnumInfos:         file_dreamserpent_identity_v1_grant_fetch_proto_enumTypes,
+		MessageInfos:      file_dreamserpent_identity_v1_grant_fetch_proto_msgTypes,
+	}.Build()
+	File_dreamserpent_identity_v1_grant_fetch_proto = out.File
+	file_dreamserpent_identity_v1_grant_fetch_proto_goTypes = nil
+	file_dreamserpent_identity_v1_grant_fetch_proto_depIdxs = nil
+}

@@ -1,0 +1,39 @@
+# drift class: COMPOUND both-ACCEPT — both reader surfaces are exercised at once
+#   under INDEPENDENT benign variations, and BOTH accept. A blocklist FQDN appears
+#   twice (resolver-lock SHAPE variation, Go-benign) AND a baseline-pack entry
+#   carries full mandatory provenance (POL-1 SCHEMA variation, Rust-benign).
+# named edge shape: duplicate blocklist FQDN (Go) + provenanced baseline-pack entry (Rust).
+# expected verdict (go, rust) = (accept, accept)  <-- compound both-accept, DIFFERENT axes
+# This is the both-ACCEPT complement of the both-REJECT compound block (20-23): it
+# pins benign acceptance across BOTH axes on ONE artifact, so a regression that
+# started REJECTING a benign compound on EITHER reader surface is caught loudly.
+# Go: accept — the line scanner harvests two `- domain: api.example` items, each
+#     with its reason+rung; ResolverLockFQDNs de-dups downstream, so a duplicate is
+#     benign at the PARSE layer (the 17-duplicate-fqdn SHAPE class). The Go scanner
+#     never inspects baseline_pack entries, so the provenance fields are invisible
+#     to it — it sees only a well-formed, non-empty blocklist.
+# Rust: accept — parse_layer stores two BlockEntry rows for the duplicate with no
+#     error, AND the baseline-pack entry carries both `provenance_source_url` and
+#     `evidence`, so the §8.1 (e) / D74 mandatory-provenance gate is satisfied (the
+#     accept path of the 12-entry-missing-provenance SCHEMA class). The two benign
+#     axes are INDEPENDENT: the Go-exercised axis is the duplicate FQDN SHAPE on the
+#     BLOCKLIST, the Rust-exercised axis is the provenance SCHEMA on a BASELINE-PACK
+#     entry — different sections, neither reader can mask the other's acceptance.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+baseline_pack:
+  entries:
+    - fqdn: api.example
+      family: core
+      ports: [443]
+      provenance_source_url: https://example.invalid/provenance
+      evidence: synthetic-fixture; not cert-pinned
+blocklist:
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

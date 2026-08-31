@@ -1,0 +1,6 @@
+{"seq":1,"session_id":"<session#1>","session_init":{"agent_types":["claude","Explore","general-purpose","Plan","statusline-setup"],"api_key_source":"none","cwd":"/work","mcp_servers":[],"model":"claude-sonnet-4-6","output_style":"default","permission_mode":"default","runtime_version":"2.1.173","tools":["Task","Bash"]},"source":["<src#1>"],"type":"session.init"}
+{"seq":2,"session_id":"<session#1>","session_state":{"reason":"requesting","state":"WORKING"},"source":["<src#2>"],"type":"session.state"}
+{"chat_message":{"blocks":[{"kind":"text","text":"The capital of France is Paris."}],"message_id":"<msg#1>","role":"assistant"},"seq":3,"session_id":"<session#1>","source":["<src#3>"],"type":"chat.message"}
+{"quota_updated":{"overage_status":"not_in_overage","rate_limit_type":"five_hour","resets_at":"<present>","semantics":"provisional","status":"allowed"},"seq":4,"session_id":"<session#1>","source":["<src#4>"],"type":"quota.updated"}
+{"seq":5,"session_accounted":{"num_turns":1,"outcome":"success","terminal_reason":"completed","usage":"<present>"},"session_id":"<session#1>","source":["<src#5>"],"type":"session.accounted"}
+{"seq":6,"session_id":"<session#1>","session_state":{"reason":"turn_complete","state":"ATTACHED"},"source":["<src#5>"],"type":"session.state"}

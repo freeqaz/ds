@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthetic NEGATIVE CONTROL (b): a suspend fires for an action:suspend rule (correct), but resume takes 420s — past the D46 fully-transparent pause budget of 300s (5 min). Resume must be transparent within budget (D46). Must FAIL with the named class resume-latency-over-pause-budget.",
+  "trips": [
+    { "name": "anomalous-volume action:suspend", "class": "action_suspend", "outcome": "suspended", "in_band_reason": false, "async_notify": true, "resume_latency_seconds": 420 }
+  ]
+}

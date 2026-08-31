@@ -1,0 +1,93 @@
+// AttachHandle — the D79 transport-ambivalent attach handle (doc 15 §5.4).
+//
+// Package home: dreamserpent.attach.v1 (doc 15 §6.1 row 8). This file authors
+// the handle a client receives to attach to a session, independent of WHICH
+// transport actually carries the bytes: the handle admits both transports from
+// day one (M0 direct client->host-agent; M2 the relay endpoint joins for the
+// web client; M4 the relay becomes the D61 spectate multiplexer). Deciding now
+// costs one repeated field; deciding later costs a v2 handle (doc 15 §5.4).
+//
+// A message or field missed at this one-shot M0 freeze is a v2-package event,
+// not a patch (proto/FREEZE.md change control; doc 17 §5). Every doc 15 §6.1
+// checklist row is implemented across this package's files and doc-commented
+// with its governing decision.
+//
+// AttachHandle is IMPORTED by orchestrator.v1 (SessionService.Attach) and
+// hypervisor.v1 (HypervisorDriver.IssueAttachHandle), per the §6.1 freeze-
+// ordering rider: those packages freeze as one wave or AFTER attach.v1, never
+// ahead of it (they import this message; CHECK 5 of scripts/check-freeze-
+// riders.sh enforces neither may be FROZEN while attach.v1 is OPEN).
+
+syntax = "proto3";
+
+package dreamserpent.attach.v1;
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/attach/v1;attachv1";
+
+// Role is the D61 one-writer/N-reader subscriber class the handle grants
+// (doc 15 §5.4, §6.1 row 2). WRITER is the single writer seat; READER is one of
+// the N read-only subscribers (canvas, console, spectators) that join WatchSession
+// as ordinary N-th readers. Arbitration is server-side at the WatchSession
+// terminator (§5.3); the writer seat lives in the session record and a D61
+// driver-handoff is a record mutation with attribution, never a second seat.
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_WRITER = 1;
+  ROLE_READER = 2;
+}
+
+// EndpointTransport tags an EndpointCandidate's transport so a client can pick
+// the one it can reach (doc 15 §5.4). DIRECT is the M0 client->host-agent
+// endpoint; RELAY is the M2 web-client relay (and at M4 the D61 spectate
+// multiplexer behind the same enum value — a multiplexed relay is still RELAY,
+// no new transport tag). Admitting both from day one is the one field that
+// keeps the later transports out of a v2.
+//
+// RAW_TERMINAL is the serpent-CLI terminal-MVP writer's raw-terminal/PTY
+// transport: the client that resolves an endpoint tagged RAW_TERMINAL goes
+// RAW (no line discipline, opaque keystroke/byte passthrough) and drives the
+// in-guest agent over the hostbridge socket's raw-terminal frames rather than
+// the structured write leg (docs/serpent-cli-mvp/10-build-decisions §A3 res. 3,
+// 01-pty-transport.md). This is an ADDITIVE freeze-reopen rider on the frozen
+// attach.v1 (proto/FREEZE.md, D137/D138 additive-additions precedent) — the
+// client learns to go raw FROM the handle; the GUEST launch mode rides the
+// opaque runtime.v1 entrypoint config (D38), the two layers complementary.
+enum EndpointTransport {
+  ENDPOINT_TRANSPORT_UNSPECIFIED = 0;
+  ENDPOINT_TRANSPORT_DIRECT = 1;
+  ENDPOINT_TRANSPORT_RELAY = 2;
+  ENDPOINT_TRANSPORT_RAW_TERMINAL = 3;
+}
+
+// EndpointCandidate is one reachable attach endpoint. The handle carries a
+// repeated set (M0: exactly the DIRECT candidate; M2+: DIRECT + RELAY) and the
+// client attaches to the first it can reach. `address` is family-agnostic — the
+// transport-ambivalence is about WHO terminates the stream, not the AF — and the
+// orchestrator never assumes IPv4 (the D75 address discipline the boundary.v1
+// package pins; mirrored here so attach addresses are never fixed32).
+message EndpointCandidate {
+  EndpointTransport transport = 1;
+  string address = 2;          // host:port or relay URL; opaque to the orchestrator
+  string server_name = 3;      // TLS SNI / cert name to verify the terminator against
+}
+
+// AuthMaterial is the short-lived, session-scoped credential the client presents
+// to attach (D39 — NEVER a long-lived cred; the long-lived credentials never
+// enter the VM and never ride this handle). It is opaque bearer material plus
+// its own expiry; `expires_at` on the handle bounds the whole handle, this one
+// bounds the credential if the two ever diverge.
+message AuthMaterial {
+  bytes token = 1;             // opaque, short-lived, session-scoped (D39)
+  uint64 expires_at = 2;       // unix seconds; credential expiry (<= handle expiry)
+}
+
+// AttachHandle is the D79 transport-ambivalent attach handle (doc 15 §5.4).
+// Field numbers track the §5.4 skeleton exactly (session_uuid=1, endpoints=2,
+// auth=3, role=4, expires_at=5) so the doc and the wire never drift.
+message AttachHandle {
+  string session_uuid = 1;
+  repeated EndpointCandidate endpoints = 2; // M0 DIRECT only; M2 RELAY joins; M4 spectate-mux
+  AuthMaterial auth = 3;                     // short-lived, session-scoped (D39)
+  Role role = 4;                             // WRITER | READER (D61)
+  uint64 expires_at = 5;                     // unix seconds; whole-handle expiry
+}

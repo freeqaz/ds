@@ -1,0 +1,69 @@
+# Dream Serpent data plane — ONE cargo workspace.
+#
+# The workspace, not any framework, is the anti-skew mechanism (D67, doc 14 §6):
+# ds-tlsproxy is built on pingora-core, ds-dnsgate on hickory — what keeps their
+# behavior aligned is that both embed the same workspace crates (policy-core,
+# ds-contracts, ds-policy-snapshot, ds-telemetry).
+#
+# Pinned dependency choices — RECORDED HERE, deliberately NOT declared yet so the
+# skeleton builds offline with the standard library only:
+#
+#   pingora-core  0.8.x   (D40 — pinned + vendored; ds-tlsproxy ONLY)
+#   hickory-dns   0.26.x  (D67 — pinned + vendored; ds-dnsgate ONLY; no hickory
+#                          types in any cross-service interface)
+#   tokio         1.x     (ONE pinned major across the whole workspace, doc 14 §6)
+#
+# When these land they go through [workspace.dependencies] below so a version can
+# never skew between crates, and through vendor/ per the pin policy (vendor/README.md).
+# Advisory-watch obligations: doc 14 §9 (owner currently UNASSIGNED).
+
+[workspace]
+resolver = "2"
+members = ["crates/*", "services/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"        # D25; OSS scope is governed by ../oss-manifest.yaml
+publish = false
+
+[workspace.dependencies]
+# Pinned + vendored at workspace level so a version can never skew between crates
+# (doc 14 §6). hickory* are ds-dnsgate-ONLY (D67); tokio is the one pinned 1.x major.
+# Default features OFF on the hickory crates: ds-dnsgate is a forwarder, not a
+# DNSSEC/DoT/DoH/DoQ/recursor server — we take only UDP+TCP/53 listening/framing
+# and a plain upstream resolver, which keeps the vendored + license surface minimal.
+tokio = { version = "1.48", default-features = false }
+hickory-server = { version = "0.26", default-features = false }   # D67 — ds-dnsgate only
+hickory-resolver = { version = "0.26", default-features = false } # D67 — ds-dnsgate only
+hickory-proto = { version = "0.26", default-features = false }    # D67 — ds-dnsgate only (wire types for tests)
+# pingora-core 0.8.1 (D40 — ds-tlsproxy ONLY). default-features = false: we take
+# only the core TCP listener surface; TLS/HTTP parsing features land at TLS-1.
+pingora-core = { version = "0.8.1", default-features = false }
+async-trait = { version = "0.1" }
+
+# ds-tlsproxy TLS-3 (D17/D82, doc 12 §3/§13.2): the per-session interception CA +
+# per-origin leaf authority and strict-WebPKI re-origination crypto. Pinned on the
+# RING backend (default-features = false + features = ["ring", ...]) to AVOID the
+# aws-lc-rs cmake/network build path; `ring` is already in the locked set as a
+# hickory transitive, so the crypto core is precedented. These are LIB-side deps
+# (used by src/ca.rs) and carry NO pingora type (D40 confinement). Hoisted here so
+# the version pin can never skew across crates.
+# "x509-parser": ca.rs reconstructs the per-session interception-CA SIGNING ISSUER
+# from the ACTUAL ingested CA cert (Issuer::from_ca_cert_der) so a minted leaf's
+# issuer DN matches the ingested CA's real subject for ANY operator/Identity-minted
+# CA (not just one named ds-session-ca-<DS_SESSION_UUID>) — required for a validating
+# client (the in-VM CC) to chain-validate the terminated leaf instead of RSTing. The
+# x509-parser crate is ALREADY a locked rcgen dep, so this feature adds NO new package.
+rcgen = { version = "0.14", default-features = false, features = ["pem", "ring", "x509-parser"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-webpki = { version = "0.103", default-features = false, features = ["std", "ring"] }
+rustls-pki-types = "1"
+
+# ds-tlsproxy TLS-5 (D8/D22/D73, doc 12 §5.2): the presented short-lived
+# credential the swap executor (src/swap.rs) touches lives in a `Zeroizing` buffer
+# wiped on drop — never-hold-the-secret as a type-level property. `zeroize` 1.9 is
+# already in the locked set (a rustls/ring transitive), so the direct edge adds NO
+# new Cargo.lock package; pure-Rust, no build script, builds offline with --locked.
+# alloc feature: we wrap a `Vec<u8>`. Hoisted here so the pin can never skew.
+zeroize = { version = "1", default-features = false, features = ["alloc"] }

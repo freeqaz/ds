@@ -1,0 +1,8 @@
+{
+  "row": "session-isolation-no-l2-path",
+  "kind": "cross-session-l2-reach",
+  "dst_ip": "198.51.100.7",
+  "peer_session": "session-c",
+  "want": "no-l2-path-between-sessions",
+  "why": "session isolation is the absence of a path, not a destination filter: a cross-session reach toward a peer VM is denied regardless of which IP it aims at — the no-L2-path proof holds for any destination, so a second session-c reach to a different documentation-range IP is denied just as the first (doc 06 §3c session isolation; §2 placement + NFT-1, D66)"
+}

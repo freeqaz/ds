@@ -1,0 +1,10 @@
+# doc-links-allowlist.txt — pre-existing link failures suppressed by the ratchet.
+#
+# Format: one entry per line, matching the exact prefix produced by
+# check-doc-links.sh:  <relative-file>:<line>: link '<url>'
+#
+# NEVER silently widen this list.  New entries require an explicit audit of
+# why the broken link exists and whether it can be fixed.  Add a comment above
+# each entry explaining the root cause.
+#
+# Currently empty: every relative link under docs/ and in README.md resolves.

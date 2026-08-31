@@ -1,0 +1,13 @@
+# drift class: the `blocklist:` section exists but carries zero entries.
+# named edge shape: empty section (D64 — the resolver lock cannot ship empty).
+# expected verdict (go, rust) = (reject, accept)
+# Go: ErrEmptyBlocklist — an empty extraction is a false green the resolver lock
+#     cannot afford (D64).
+# Rust: parse_layer accepts an empty blocklist (an empty list is well-formed
+#     schema); the D64 non-empty bar lives in the suite assertions, not the
+#     parser. Complementary coverage again.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+blocklist:
+passthrough: []

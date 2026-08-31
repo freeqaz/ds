@@ -1,0 +1,8 @@
+{
+  "row": "doh-dot-bypass-fails",
+  "kind": "dns-over-https",
+  "domain": "dns.google",
+  "dst_ip": "8.8.8.8",
+  "want": "deny-known-doh-resolver",
+  "why": "DoH bypass: a DoH attempt to a known public DoH resolver domain in the D64 POL-2 baseline blocklist is denied at DNS-3 and the TLS-1 SNI check (NFT-4 + POL-2 named-resolver half)"
+}

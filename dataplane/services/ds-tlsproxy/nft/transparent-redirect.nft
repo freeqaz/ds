@@ -1,0 +1,48 @@
+# NFT-2 transparent-path REDIRECT ruleset — ds-tlsproxy spike (doc 03 §3;
+# doc 09 NFT-2; D69). Match on the INTERFACE the VM is attached to (iifname),
+# NEVER on source IP — addresses can be forged from inside the VM, the
+# attachment point cannot (doc 03 §3, the NFT-2 control).
+#
+# Authored by this spike as GOLDEN TEXT. In production this is programmed by
+# ds-dnsgate / the host agent (D76), NEVER by ds-tlsproxy (which holds
+# CAP_NET_RAW only, never CAP_NET_ADMIN — a compromised proxy must not rewrite
+# the ruleset that contains it; doc 12 §4.2 frozen non-edge).
+#
+# LIVE-VALIDATION STATUS (see ../SPIKE-NOTES.md §2.1):
+#   - the `iifname` interface-match itself LOADS on this host (proven in a
+#     user+net namespace) — it is the load-bearing control;
+#   - the `redirect to :port` statement now LOADS too (nft_redir / nft_nat
+#     restored 2026-06-13, no reboot — validate-transparent-redirect.sh check 3
+#     = PASS). The live REDIRECT + SO_ORIGINAL_DST recovery is exercised by
+#     tests/e2e_live_redirect.rs (a genuinely-redirected socket recovers the real
+#     pre-DNAT dst), on top of the loopback + real-getsockopt coverage in §1.
+#
+# One nat-type prerouting chain at dstnat priority (-100), per D69 ("one nat-type
+# prerouting chain in the versioned NFT-1 artifact"). The full NFT-1 artifact
+# also carries udp/53 -> ds-dnsgate and the udp/443 reject (D70); this spike file
+# scopes to the tcp 80/443 -> ds-tlsproxy transparent redirect only.
+
+table ip ds_transparent {
+	chain prerouting {
+		# nat-type prerouting hook at dstnat priority (-100); a future TPROXY
+		# backend would coexist at tproxy priority (-150) on its own lane (D69).
+		type nat hook prerouting priority dstnat
+		policy accept
+
+		# tcp 80  (cleartext HTTP) on the agent tap -> ds-tlsproxy :18080.
+		# Match the interface ONLY (NFT-2): never `ip saddr` as the control.
+		iifname "dstap-0" tcp dport 80 redirect to :18080 comment "NFT-2: VM http -> ds-tlsproxy"
+
+		# tcp 443 (TLS) on the agent tap -> ds-tlsproxy :18443. The proxy peeks
+		# the ClientHello SNI (TLS-1) and checks it AGAINST the SO_ORIGINAL_DST
+		# the redirect preserved (never substituted for it; D69 invariant 1).
+		iifname "dstap-0" tcp dport 443 redirect to :18443 comment "NFT-2: VM https -> ds-tlsproxy"
+	}
+}
+
+# Per-session generalization (production): the single `dstap-0` literal becomes a
+# rule per live tap `dstap-<idx>` (or one `iifname "dstap-*"` wildcard + the
+# post-NAT local address carrying attribution, doc 12 §2.2 — the OQ1 spike's
+# per-session /31 addressing makes the single-redirect-port shape sound). The
+# redirect-port-block fallback (per-session ports, never source-IP attribution)
+# is built dormant in the production NFT-1 artifact (doc 12 §13.1, FREE cell).

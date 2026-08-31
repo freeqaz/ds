@@ -1,0 +1,5 @@
+{
+  "_comment": "Synthetic VIOLATION (undecidable horizon): a fresh grant (1700003600, +3600s) but a presented token whose TTL is 0 (non-positive) — it names no real horizon, so the ttl-vs-now verdict is undecidable. The check must FAIL with inject-class-ttl-horizon-undecidable, not mask it as a routine expiry (a 0 TTL would otherwise satisfy ttl <= now and read as merely lapsed).",
+  "policy": { "now_unix": 1700000000 },
+  "presentation": { "token_ttl_unix": 0, "grant_ttl_unix": 1700003600 }
+}

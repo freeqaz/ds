@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthetic VIOLATION (wrong-destination egressed): an ISSUED{github} digest presented to a destination it is NOT issued to (evil.example) that was NOT blocked — the ISSUED{service_id} credential leaked to the wrong destination. The check must FAIL with inject-class-issued-digest-wrong-destination-egressed (keyed-issued-to-wrong-destination, block+log; doc 16 §5.5/§6/§10). This is the regression the row exists to catch: the wrong-destination block reverting to a silent pass.",
+  "presentations": [
+    { "name": "issued-digest-to-wrong-destination", "issued_service_id": "github", "egress_destination": "evil.example", "blocked": false }
+  ]
+}

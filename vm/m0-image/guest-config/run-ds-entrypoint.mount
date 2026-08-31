@@ -1,0 +1,64 @@
+# run-ds-entrypoint.mount — the config-drive mount unit (gap-1 guest side, D38).
+#
+# The host agent delivers the per-session structured runtimev1.EntrypointConfig
+# into the guest as a per-session READ-ONLY config-drive: a SECOND disk the boot
+# attaches alongside the qcow2 overlay, built host-side by the libvirt driver's
+# EntrypointDeliverer (orchestrator/internal/hypervisor/libvirt/configdrive.go,
+# BuildConfigDrive — genisoimage, no libguestfs). This unit mounts THAT drive so
+# ds-entrypoint's loadConfig finds config.pb at DS_ENTRYPOINT_CONFIG_DIR.
+#
+# CONTRACT MATCH (configdrive.go — replicated here, NEVER imported; D80 keeps the
+# guest tree from crossing into orchestrator/):
+#   - filesystem  : iso9660. The host packs the drive with genisoimage
+#     (-rational-rock -joliet), which is read-only by construction — so the
+#     read-only invariant holds even before the `ro` option and the <readonly/>
+#     disk flag.
+#   - volume label: DS_ENTRYPOINT (configdrive.go configDriveVolumeLabel). We
+#     mount What=/dev/disk/by-label/DS_ENTRYPOINT rather than guessing a device
+#     node (/dev/vdb), exactly the cloud-init-style config-drive convention — the
+#     attach order of the 2nd disk is not something the guest may assume.
+#   - mount point : /run/ds/entrypoint (M0_ENTRYPOINT_CONFIG_DIR, the dir
+#     ds-entrypoint.service hands ds-entrypoint as DS_ENTRYPOINT_CONFIG_DIR and
+#     vm/entrypoint/config.go reads config.pb from). The unit FILE NAME must be the
+#     systemd-escaped mount path: `run-ds-entrypoint.mount` == /run/ds/entrypoint;
+#     a mismatch is rejected by systemd, so build-m0-image.sh asserts the two agree.
+#
+# ORDERING (so the config exists before the entrypoint loads it):
+#   Before=ds-entrypoint.service  — the entrypoint is fail-closed on an absent
+#                                   config (config.go loadConfig), so the drive
+#                                   MUST be mounted first.
+#   RequiredBy=ds-entrypoint.service — a config-drive that fails to mount must
+#                                   stop the entrypoint from launching (fail-closed:
+#                                   no config => no runtime => no egress).
+#
+# build-m0-image.sh substitutes the concrete mount point / label / fs for the
+# __ENTRYPOINT_CONFIG_DIR__ / __CONFIG_DRIVE_LABEL__ / __CONFIG_DRIVE_FS__ tokens
+# at bake time (single-sourced from m0-image.env).
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[Unit]
+Description=Dream Serpent per-session entrypoint config-drive (gap-1, D38)
+Documentation=https://github.com/dream-serpent/dream-serpent/blob/main/vm/m0-image/README.md
+# The drive is a per-session artifact the host attaches at clone (doc 15 §4.1
+# step 8); it must be mounted before the entrypoint reads its config.
+Before=ds-entrypoint.service
+
+[Mount]
+# By LABEL, never a fragile device-node guess — the cloud-init-style config-drive
+# convention the host stamps (configdrive.go configDriveVolumeLabel).
+What=/dev/disk/by-label/__CONFIG_DRIVE_LABEL__
+Where=__ENTRYPOINT_CONFIG_DIR__
+Type=__CONFIG_DRIVE_FS__
+# Read-only mount of a read-only (iso9660) drive. nosuid,nodev,noexec: the drive
+# carries data (config.pb), never executables or device nodes.
+Options=ro,nosuid,nodev,noexec
+
+[Install]
+# A config-drive that fails to mount must fail the entrypoint (hard dep): enabling
+# this mount installs the ds-entrypoint.service.requires symlink so the drive is
+# pulled in + ordered Before the entrypoint. RequiredBy/WantedBy are [Install]
+# directives — systemd IGNORES them in [Unit] (live-found 2026-06-17: stranded in
+# [Unit] with no [Install], the mount was never pulled, so config.pb never mounted
+# and ds-entrypoint fail-closed even with a drive attached).
+RequiredBy=ds-entrypoint.service

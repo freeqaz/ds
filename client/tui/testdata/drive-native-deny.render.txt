@@ -1,0 +1,8 @@
+::session attached  model=claude-sonnet-4-6  runtime=2.1.173  perm=default  cwd=/work  tools=[Bash]
+$ tool Bash  {"command":"mkdir -p /work/scratch \u0026\u0026 echo seeded \u003e /work/scratch/seed.txt","description":"Create scratch directory and seed file"}
+? ASK: approve Bash  {"command":"mkdir -p /work/scratch \u0026\u0026 echo seeded \u003e /work/scratch/seed.txt","description":"Create scratch directory and seed file"}  [allow-once / allow-always(PROPOSAL) / deny]
+! ask resolved: DENY Denied by policy: scratch setup not permitted in this session.
+= tool denied: Denied by policy: scratch setup not permitted in this session.
+> assistant: The Bash command was denied, so I did not create the scratch directory.
+==session success turns=2 dur=4100ms denials=1 reason=completed
+[ session 000000000b00 | success | seq 7 ]

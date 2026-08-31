@@ -1,0 +1,37 @@
+-- 0010_session_mint_expiry.sql — the minted-credential / interception-CA EXPIRY
+-- horizon on the never-recycled session record (doc 15 §5.6, doc 16 §5.4;
+-- D22/D66/D72/D73/D82). ADDITIVE column only.
+--
+-- WHY THIS MIGRATION. The §4.1 step-5 mint (sessions/createstep5.go +
+-- controlplane/identityseams.go) returns the per-session workload-identity / CA
+-- TTL the Minter seam surfaces (MintResult.Expiry → the create-local
+-- st.mintExpiry). The credential is short-lived BY DESIGN (D22 "short-lived
+-- per-session cert/token"; D82 the interception CA "dies at teardown"), and doc 16
+-- §5.4 park/resume requires that an EXPIRED CREDENTIAL RE-MINTS ON RESUME and that
+-- the routable window be bounded by the TTL. Until this migration that expiry rode
+-- ONLY create-local coordinator state (sessioncreate.go st.mintExpiry) and the
+-- OnMintExpiry sink — so after an orchestrator restart the §4.2 teardown/resume
+-- path had no DURABLE horizon to read, and an expired credential never actually
+-- re-minted. This is the sanctioned §5.6 store-seam unfreeze for exactly that
+-- persistence, following the migration-0009 PinnedRole precedent.
+--
+-- ADDITIVE-ONLY (the unfreeze discipline). ONE nullable column on the existing
+-- sessions table — no existing column, CHECK, or index is touched, so every
+-- pre-existing row and the conformance suite stay byte-for-byte valid. A row
+-- written before this migration (or by a mint that surfaced NO expiry — a bare
+-- MintClient with no MintExpiryClient extension, or a TTL-less proto) carries NULL
+-- mint_expiry: the "no TTL to track" not-set posture (NOT "expires at the epoch").
+-- The Go store maps Session.MintExpiry's ZERO value (MintExpiry.IsZero()) to SQL
+-- NULL and back, exactly the way ready_at / attached_at / destroyed_at map their
+-- *time.Time nil — the not-set timestamp posture this record already speaks.
+--
+-- THE HORIZON (doc 15 §5.6, doc 16 §5.4):
+--   mint_expiry — the wall-clock instant the minted credential / interception CA
+--                 stops being valid (the mint-response token TTL / CA expiry,
+--                 D22/D82). NULL = the mint surfaced no expiry (not-set); a
+--                 non-NULL value is the durable routable-window / teardown-re-mint
+--                 horizon the §4.2 resume re-mint path reads (doc 16 §5.4: expired
+--                 creds re-mint on resume).
+
+ALTER TABLE sessions
+    ADD COLUMN mint_expiry timestamptz; -- doc 15 §5.6 / doc 16 §5.4 minted-credential expiry (NULL = no TTL tracked)

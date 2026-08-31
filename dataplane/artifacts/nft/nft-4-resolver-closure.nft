@@ -1,0 +1,167 @@
+#!/usr/sbin/nft -f
+#
+# NFT-4 — Resolver-bypass closure ruleset.
+# artifact-version: 1
+# governing: doc 09 §3 (NFT-4) · doc 06 §3(c) · doc 11 §3.3 · doc 14 §2/§5/§10
+#            · D64 D69 D70 D71 D74 D75 D76
+#
+# WHAT THIS IS
+#   The versioned, declarative NFT-4 closure ruleset that completes the
+#   resolver-bypass story on top of the NFT-1 default-deny floor + NFT-2
+#   transparent redirect (nft-1-bootstrap.nft). Like every artifact here it is a
+#   BUILD ARTIFACT installed by a systemd unit, never hand-applied state (doc 09
+#   §3 — if you are typing `nft` into a host shell, you are doing it wrong).
+#
+#   It lives in its OWN `inet` table (`ds_resolver_closure`) so it layers on top
+#   of `ds_boundary` without re-authoring that floor: NFT-1 keeps its frozen
+#   scope fence (default-deny + the udp/tcp 53 → ds-dnsgate redirect), and the
+#   three closure controls D70/NFT-4 add — the foreign-resolver bypass-attempt
+#   counter+nflog, the DoT 853 drop, and the udp/443 QUIC reject — ride here,
+#   reversible with a single `nft delete table inet ds_resolver_closure`.
+#
+#   LIVE-REJECT OWNERSHIP (changed): the udp/443 QUIC reject is now issued by the
+#   NFT-1 floor (nft-1-bootstrap.nft), in its `forward` chain at priority filter
+#   (0) — i.e. BEFORE this table's forward chain at priority 1, and before NFT-1's
+#   own terminal `ct state new drop`. nftables base chains run per-hook in
+#   ascending priority and a `drop` is TERMINAL across chains, so the floor MUST
+#   reject udp/443 itself or its drop would shadow any reject here (the cross-
+#   base-chain regression tracked as taskdb 01KTZV3XN). The reject below is kept
+#   AS-IS as a redundant DEFENSE-IN-DEPTH companion (it would only fire if the
+#   floor's reject were ever removed); it is NOT the live reject anymore. It also
+#   keeps this artifact the home of the RowQUICReject->NFT4 conformance ownership
+#   and the ds-nft `quic_reject` shape lint, so neither goes stale.
+#
+# INTERFACE MATCHING (D66, doc 03 §3, the doc 06 (c) in-VM-spoofing invariant)
+#   Every rule that scopes to a session matches `iifname "dstap-*"` — the
+#   unforgeable attachment point — NEVER `ip saddr`. A VM can forge its source
+#   address; it cannot forge which tap it is attached to. A packet aimed at a
+#   foreign resolver (`nameserver 8.8.8.8` inside the VM) still arrives on its
+#   real tap, so the closure catches it regardless of the destination IP it
+#   chose: all destination-port-53 traffic lands on ds-dnsgate no matter what.
+#
+# FAMILY (D75, doc 14 §11)
+#   Authored `inet` so the IPv6 twins are dropped by the dormant-v6 default and
+#   no icmpv6 allowance leaks in. The udp/443 reject uses `icmpx` so the single
+#   rule emits the family-appropriate port-unreachable (icmp for v4, icmpv6 for
+#   v6) once v6 turns on end to end (DNS-1/OQ10) without a second rule.
+#
+# MARKS (D76, doc 14 §5)
+#   NFT-4 needs NO marks. No packet-mark or conntrack-mark expression and no mark
+#   literal appears anywhere in this file by design; the CI mark lint
+#   (ds-contracts ds-nft-mark-lint, lint-nft-artifacts.sh) enforces it. The
+#   per-session ct-mark accounting arrives with NFT-5, sourced only from
+#   ds-contracts constants — never authored here. The bypass-attempt and QUIC
+#   counters below are plain rule `counter`s (packet/byte tallies), not marks.
+#
+# THE THREE CLOSURE CONTROLS (doc 09 §3 NFT-4, D69/D70)
+#   1. Foreign-resolver bypass-attempt counter + nflog (D69, round2/04). The
+#      NFT-1 redirect already forces port-53 to ds-dnsgate; here we ADD the
+#      observability D69 froze: a VM packet aimed at a NON-local resolver (any
+#      port-53 destination that is not the boundary's own resolver address) is
+#      the bypass-attempt signal. We count it per the session interface and
+#      nflog it so ds-flowlog can join it to the session (the DnsEvent
+#      `aimed_resolver` field reserved at Stage 0). The packet is NOT dropped —
+#      the NFT-1 redirect still answers it through ds-dnsgate; this rule only
+#      OBSERVES the bypass attempt before the redirect verdict in NFT-1's
+#      prerouting chain handles delivery.
+#   2. DNS-over-TLS (853) dropped (doc 09 §3 NFT-4). DoT would tunnel resolution
+#      past ds-dnsgate inside TLS; there is no transparent-DoT story, so udp/tcp
+#      853 from a session tap is dropped outright (logged for attribution).
+#   3. udp/443 (QUIC) REJECTED — never silently dropped (D70). The reject is
+#      `reject with icmpx type port-unreachable` + a `counter`: reject-not-drop
+#      so the refusal is observable (no RFC-4074 ~5s client hang, and the
+#      flip-to-inspect trigger can see it), and counted per session so the
+#      QuicBlocked reason code (ds_contracts::reject::RejectReason::QuicBlocked,
+#      the off-box half) has its on-box tally. This forces non-cooperative
+#      clients onto the TCP/443 fallback the egress gateway (ds-tlsproxy) can
+#      see. The complementary cooperative-client steering is DNS-4 rule 4
+#      (AAAA/HTTPS(65)/SVCB suppression in ds-dnsgate) — two independent
+#      controls, never merged into one assertion (D70, doc 11 §3.3).
+#
+# SCOPE FENCE
+#   NFT-4 is exactly these three closure controls. Out of scope here: the NFT-1
+#   default-deny floor and the udp/tcp 53 → ds-dnsgate redirect (nft-1-bootstrap
+#   .nft), the NFT-2b 80/443 → ds-tlsproxy cutover (TLS-1), NFT-3 per-session
+#   allow-sets, and NFT-5 ct-mark accounting. The DoH closure is enforced at the
+#   DNS-3 (ds-dnsgate denial, D71) and TLS-1 (ds-tlsproxy SNI) layers over the
+#   D64 baseline blocklist (POL-2) — a policy/service control, NOT an L3/4 rule,
+#   so it is asserted by the resolverlock conformance adapter and policy-core,
+#   not authored in this file.
+#
+# PARSE-CHECK (doc 06 (c) cadence)
+#   `nft -c -f nft-4-resolver-closure.nft` is a full kernel-aware check; the
+#   `reject`, `log`, and `nflog` expressions bind to the kernel even in
+#   check-only mode, so in a container/sandbox without the modules loadable `-c`
+#   may report "Could not process rule" on those lines (an environment limit,
+#   not a grammar failure — the same ceiling the runbook nft rulesets document). Run on
+#   a host with the modules, or strip those lines to confirm pure syntax. The
+#   shape of the udp/443 reject is CI-checkable with NO kernel via the ds-nft
+#   `quic_reject` contract lint (crates/ds-nft/src/quic_reject.rs); the port-53
+#   capture shape via the `redirect` contract lint (crates/ds-nft/src/redirect
+#   .rs).
+
+# Idempotent install: drop and recreate ONLY our own table. We never touch
+# ds_boundary (NFT-1) or any other table in the netns.
+table inet ds_resolver_closure
+delete table inet ds_resolver_closure
+
+table inet ds_resolver_closure {
+
+	# ---- Resolver-bypass closure (prerouting, observe-only) ------------------
+	# Priority dstnat - 1 (i.e. -101, just BEFORE NFT-1's dstnat -100 redirect)
+	# so the bypass-attempt observation runs before NFT-1 redirects the packet
+	# into ds-dnsgate. These rules OBSERVE (count + nflog); they never issue a
+	# verdict on port-53 traffic — the NFT-1 redirect owns delivery, so a counted
+	# bypass attempt is still answered correctly through our resolver.
+	chain resolver_bypass_observe {
+		type nat hook prerouting priority -101; policy accept;
+
+		# Foreign-resolver bypass attempt (D69, round2/04): a session-tap packet
+		# aimed at port 53 at any destination other than the boundary's own
+		# resolver address is the bypass signal. Matched on the unforgeable
+		# `iifname` (never `ip saddr`); the destination address it chose is
+		# irrelevant to delivery (NFT-1 redirects it regardless) but IS the
+		# signal we count. We log+count both transports. nflog group 4 carries
+		# the drop/observe stream ds-flowlog consumes (NFT-5/LOG-2); the per-rule
+		# `counter` is the on-box tally that pairs with DnsEvent.aimed_resolver.
+		iifname "dstap-*" udp dport 53 counter log prefix "ds-nft4 resolver-bypass " group 4
+		iifname "dstap-*" tcp dport 53 counter log prefix "ds-nft4 resolver-bypass " group 4
+	}
+
+	# ---- DoT drop + QUIC reject (forward, default-deny floor companion) -------
+	# Filter-hook forward at priority filter + 1 (i.e. 1, just AFTER NFT-1's
+	# forward chain at priority filter / 0) so NFT-1's established/related accept
+	# runs first and these closure verdicts apply only to NEW session egress.
+	chain resolver_closure_forward {
+		type filter hook forward priority 1; policy accept;
+
+		# Control 2 — DNS-over-TLS (853) dropped (doc 09 §3 NFT-4). DoT would
+		# tunnel resolution past ds-dnsgate inside TLS; there is no transparent
+		# DoT path, so drop both transports outright and log for attribution.
+		iifname "dstap-*" udp dport 853 counter log prefix "ds-nft4 dot-drop " group 4 drop
+		iifname "dstap-*" tcp dport 853 counter log prefix "ds-nft4 dot-drop " group 4 drop
+
+		# Control 3 — udp/443 (QUIC) REJECTED, never silently dropped (D70). The
+		# verdict is `reject with icmpx type port-unreachable` (observable refusal,
+		# family-appropriate via icmpx) plus a `counter` (the per-session
+		# QuicBlocked tally). This forces non-cooperative QUIC clients onto the
+		# TCP/443 fallback the egress gateway can inspect.
+		#
+		# DEFENSE-IN-DEPTH, NOT the live reject. As of the floor-self-sufficiency
+		# fix (taskdb 01KTZV3XN) the LIVE udp/443 reject is issued by NFT-1's
+		# forward chain at priority filter (0) — first, before this table's forward
+		# chain at priority 1, and before NFT-1's terminal `ct state new drop`
+		# (which, being terminal across base chains, would otherwise shadow this
+		# rule). This reject is REDUNDANT in the normal install — it only fires if
+		# the floor's reject were ever removed — and is kept deliberately: it keeps
+		# this artifact the home of the RowQUICReject->NFT4 conformance ownership
+		# and the ds-nft quic_reject contract lint shape (removing it would make
+		# both stale). It is the SAME exact shape that lint enforces.
+		#
+		# UNADMITTED-QUIC DEFAULT. Like the floor's reject, this is the default for
+		# UNADMITTED udp/443; supporting QUIC later is a per-session admit (NFT-3
+		# allow-set style) that ACCEPTS an admitted (dest, udp/443) flow BEFORE the
+		# reject — not removing this default.
+		iifname "dstap-*" udp dport 443 counter reject with icmpx type port-unreachable
+	}
+}

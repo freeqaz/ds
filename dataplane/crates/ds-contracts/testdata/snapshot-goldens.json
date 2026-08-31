@@ -1,0 +1,104 @@
+{
+  "ds_fixture": {
+    "provenance": "synthetic",
+    "seam": "content_hash canonical serialization (doc 13 §5.1, D120) — Go nftbridge produce-once <-> Rust ds-contracts verify-only",
+    "created": "2026-06-12",
+    "note": "SYNTHETIC. All payloads are hand-composed POL-1/role fragments; all hashes are SHA-256 over the UTF-8 bytes of `payload`, recomputable with: printf '%s' \"$payload\" | sha256sum. No real credentials, tokens, or key material. The two committed copies (orchestrator/internal/nftbridge/testdata/ and dataplane/crates/ds-contracts/testdata/) MUST stay byte-identical — scripts/check-snapshot-goldens.sh is the gate."
+  },
+  "spec": "doc 13 §5.1 — SHA-256 (full 32 bytes, no truncation) over a produce-once RFC 8785 (JCS) canonical-JSON payload under the pinned proto->JSON mapping (no map<>, repeated {key,value} in lexicographic key order; absent==default==omitted with explicit presence for meaningful defaults; no floats; int64-as-string; enum-as-integer; bytes-as-base64url).",
+  "cases": [
+    {
+      "name": "dns_zero_present",
+      "kind": "policy",
+      "desc": "dns block with a MEANINGFUL-ZERO negative_ttl present explicitly (uncached, doc 13 §2).",
+      "payload": "{\"negative_ttl\":0,\"upstream_resolvers\":[\"1.1.1.1\",\"8.8.8.8\"]}",
+      "content_hash": "87511efd433682ce4c4a792a9748a3f5e134344fac5274f09295345438ad0454"
+    },
+    {
+      "name": "dns_zero_reordered",
+      "kind": "policy",
+      "desc": "FIELD-ORDER-ONLY diff of dns_zero_present (keys composed in reverse). MUST hash EQUAL.",
+      "payload": "{\"negative_ttl\":0,\"upstream_resolvers\":[\"1.1.1.1\",\"8.8.8.8\"]}",
+      "content_hash": "87511efd433682ce4c4a792a9748a3f5e134344fac5274f09295345438ad0454",
+      "hash_equal_to": "dns_zero_present"
+    },
+    {
+      "name": "dns_negttl_absent",
+      "kind": "policy",
+      "desc": "Same dns block but negative_ttl ABSENT (omitted). MUST hash DIFFERENTLY from dns_zero_present (meaningful-zero vs absent differ).",
+      "payload": "{\"upstream_resolvers\":[\"1.1.1.1\",\"8.8.8.8\"]}",
+      "content_hash": "5c738069e6c60d85478354d9d96e81d5c6ae666016d59295776ba6082a37d302",
+      "hash_differs_from": "dns_zero_present"
+    },
+    {
+      "name": "dns_default_omitted",
+      "kind": "policy",
+      "desc": "SET-TO-DEFAULT vs ABSENT: a dns block whose negative_ttl carries its NON-meaningful default and is therefore OMITTED by the producer (absent==default==omitted, doc 13 §5.1). MUST hash EQUAL to dns_negttl_absent — the complement of dns_zero_present's meaningful-zero, which must differ.",
+      "payload": "{\"upstream_resolvers\":[\"1.1.1.1\",\"8.8.8.8\"]}",
+      "content_hash": "5c738069e6c60d85478354d9d96e81d5c6ae666016d59295776ba6082a37d302",
+      "hash_equal_to": "dns_negttl_absent"
+    },
+    {
+      "name": "dns_negttl_five",
+      "kind": "policy",
+      "desc": "dns block with the DEFAULT negative_ttl=5 present. Distinct from both zero-present and absent.",
+      "payload": "{\"negative_ttl\":5,\"upstream_resolvers\":[\"1.1.1.1\",\"8.8.8.8\"]}",
+      "content_hash": "db6b4170ec43b3b3c66ba1b0928767e1863262caea442cdf7e7a45a1d0d063e6"
+    },
+    {
+      "name": "baseline_pack",
+      "kind": "policy",
+      "desc": "Keyed collection (families) as a repeated {key,value} list; demonstrates the no-map<> mapping. Array element order is the caller-pinned order (core/vcs/packages/telemetry).",
+      "payload": "{\"families\":[{\"key\":\"core\",\"value\":{\"tier\":\"enabled\"}},{\"key\":\"vcs\",\"value\":{\"tier\":\"enabled\"}},{\"key\":\"packages\",\"value\":{\"tier\":\"enabled\"}},{\"key\":\"telemetry\",\"value\":{\"tier\":\"disabled\"}}],\"pack_version\":\"2026.06.11-v2\"}",
+      "content_hash": "bdcf3af6bfa03225a6b9c4f905d8bd42630cb1a11e143a8a4d16b577dcd39841"
+    },
+    {
+      "name": "guardrail_typed",
+      "kind": "policy",
+      "desc": "int64-as-string (token_budget), enum-as-integer (rung), bytes-as-base64url (digest 0xdeadbeef -> 3q2-7w), and a bool. Pins the pinned-mapping type rules.",
+      "payload": "{\"digest\":\"3q2-7w\",\"enabled\":true,\"id\":\"vm-llm-token-quota\",\"rung\":1,\"token_budget\":\"1000000\"}",
+      "content_hash": "a089bf9fb30579f9be78f57d203fceef93493d35d48153c3c2fe2d12fc5b53c4"
+    },
+    {
+      "name": "role_document",
+      "kind": "role",
+      "desc": "doc 18 §7 role document on the IDENTICAL canonical path — one canonicalizer, two documents (doc 13 §5.1 'One spec, two documents').",
+      "payload": "{\"name\":\"reviewer\",\"permissions\":[\"read\",\"comment\"],\"version\":3}",
+      "content_hash": "5e75653b5b4044ccaeb4097e811dddbf3a67b40931b79d448d287bdd8324948b"
+    },
+    {
+      "name": "escaping",
+      "kind": "policy",
+      "desc": "JCS string escaping and non-ASCII raw UTF-8 (café, snake emoji U+1F40D), plus control/quote/backslash two-char escapes; key order a/b/c.",
+      "payload": "{\"a_key\":\"café\",\"b_key\":\"line1\\nline2\\t\\\"quoted\\\"\\\\back\",\"c_key\":\"emoji-🐍\"}",
+      "content_hash": "e4d4c6186facf54f903d1e3492e74fbd072a888a313d0d195a1581617898ece7"
+    },
+    {
+      "name": "host_composite",
+      "kind": "composite",
+      "desc": "Composite host document (doc 13 §5, D120 / OQ11): shared block + per-session repeated section. Sections given OUT of session_id order (sess-zzz before sess-aaa) MUST emit ordered by session_id. The host content_hash is SHA-256 over the whole document payload; per-section sub-hashes roll up alongside.",
+      "payload": "{\"sections\":[{\"policy\":{\"allowlist\":[\"github.com\"]},\"session_id\":\"sess-aaa\"},{\"policy\":{\"allowlist\":[\"api.anthropic.com\"]},\"session_id\":\"sess-zzz\"}],\"shared\":{\"posture\":1,\"schema_version\":\"pol1/v0\"}}",
+      "content_hash": "b2b67f09aee177d2d91981d2fb17d2625f90641419df0386b33a2aba29fbd82b",
+      "sections": [
+        {
+          "session_id": "sess-aaa",
+          "payload": "{\"policy\":{\"allowlist\":[\"github.com\"]},\"session_id\":\"sess-aaa\"}",
+          "sub_hash": "d2fefa9d29c36db24d61b8024d9cb39a4351da94d60edd16ca589dc129de1663"
+        },
+        {
+          "session_id": "sess-zzz",
+          "payload": "{\"policy\":{\"allowlist\":[\"api.anthropic.com\"]},\"session_id\":\"sess-zzz\"}",
+          "sub_hash": "f93b0b4a3d9ff89f82d5e510ce3070dc12c321614d6c8dfd34fe7af1256ce141"
+        }
+      ]
+    }
+  ],
+  "adversarial": {
+    "byte_mutated": {
+      "desc": "A byte-mutated transport of dns_zero_present: one digit flipped in the payload. The Rust verify-only path MUST reject it against dns_zero_present's content_hash (NACK host-wide) — never re-canonicalize and never accept.",
+      "base_case": "dns_zero_present",
+      "mutated_payload": "{\"negative_ttl\":1,\"upstream_resolvers\":[\"1.1.1.1\",\"8.8.8.8\"]}",
+      "expected_hash_of_base": "87511efd433682ce4c4a792a9748a3f5e134344fac5274f09295345438ad0454"
+    }
+  }
+}

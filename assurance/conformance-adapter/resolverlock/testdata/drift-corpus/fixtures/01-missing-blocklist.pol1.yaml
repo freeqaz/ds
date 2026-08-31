@@ -1,0 +1,17 @@
+# drift class: the top-level `blocklist:` key is renamed/removed.
+# named edge shape: renamed/removed key.
+# expected verdict (go, rust) = (reject, accept)
+# Go: the resolver-lock scanner has nothing to extract -> ErrNoBlocklistSection
+#     (the resolver-lock tripwire: a renamed key would silently empty the lock).
+# Rust: ds_contracts::pol1::parse_layer tolerates an absent blocklist (the field
+#     is simply empty); the schema parser does not require it. This is the
+#     COMPLEMENTARY-COVERAGE case: the Go offline half guards the resolver-lock
+#     shape the Rust schema parser is blind to.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+resolver_denylist:
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

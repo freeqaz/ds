@@ -1,0 +1,23 @@
+# drift class: a multi-document YAML stream (`---` separators, two documents).
+# named edge shape: multi-document streams.
+# expected verdict (go, rust) = (accept, reject)
+# Rust: Syntax — parse_layer reads a SINGLE document; the `---` marker and the
+#     trailing second document are unexpected content it rejects.
+# Go: the resolver-lock scanner is a flat line scan: the `---` lines are not
+#     column-0 mapping keys, the first `blocklist:` opens the section, and the
+#     second document's column-0 `layer:` key closes it — so the first document's
+#     blocklist still extracts cleanly. The Rust reader is the multi-document
+#     tripwire (complementary coverage).
+---
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+blocklist:
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []
+---
+schema_version: pol1/v0
+layer: org
+posture: standard

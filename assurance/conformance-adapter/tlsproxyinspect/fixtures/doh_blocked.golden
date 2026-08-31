@@ -1,0 +1,66 @@
+{
+  "kind": "doh-blocked",
+  "why": "doc 06 §2.2 row 5 / doc 06 §3(c) DNS-gated allow-sets, no bypass; doc 09 §5 TLS-6 + NFT-4; doc 12 §5.3 §10; D42/D68/D70. A DoH client makes an HTTPS request to a DNS-over-HTTPS endpoint on an OTHERWISE-ALLOWED host — a bypass NFT-4's IP allow-set cannot see. The egress gateway recognizes the DoH request SHAPE at HTTP level on the inspected path (method + path + content-type/accept) and REFUSES it with 403 Forbidden, carrying PolicyDecision provenance rule_id='doh-blocked' / policy_layer='boundary', BEFORE any upstream forwarding. This golden pins the block verdict, the rule provenance, the request metadata, and the body DIGEST — the DNS wireformat query is a sensitive name-resolution attempt and NEVER appears in any log/event/fixture (D73 / LOG-5).",
+  "host": "api.anthropic.com",
+  "rows": [
+    {
+      "name": "POST application/dns-message (RFC 8484 wireformat)",
+      "method": "POST",
+      "path": "/dns-query",
+      "content_type": "application/dns-message",
+      "blocked": true,
+      "status": 403,
+      "rule_id": "doh-blocked",
+      "policy_layer": "boundary",
+      "body_digest": "sha256:d1525f4b4ad5b602fbfe69e5c0b8f4033d749d1499d1149b19a789e83dc5ffe4",
+      "body_len": 46
+    },
+    {
+      "name": "POST /.well-known/dns-query (well-known DoH path)",
+      "method": "POST",
+      "path": "/.well-known/dns-query",
+      "content_type": "application/dns-message",
+      "blocked": true,
+      "status": 403,
+      "rule_id": "doh-blocked",
+      "policy_layer": "boundary",
+      "body_digest": "sha256:d1525f4b4ad5b602fbfe69e5c0b8f4033d749d1499d1149b19a789e83dc5ffe4",
+      "body_len": 46
+    },
+    {
+      "name": "GET ?dns=\u003cbase64url\u003e (RFC 8484 GET)",
+      "method": "GET",
+      "path": "/dns-query?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB",
+      "blocked": true,
+      "status": 403,
+      "rule_id": "doh-blocked",
+      "policy_layer": "boundary",
+      "body_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_len": 0
+    },
+    {
+      "name": "GET Accept: application/dns-json (JSON-DoH)",
+      "method": "GET",
+      "path": "/resolve?name=example.com\u0026type=A",
+      "accept": "application/dns-json",
+      "blocked": true,
+      "status": 403,
+      "rule_id": "doh-blocked",
+      "policy_layer": "boundary",
+      "body_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_len": 0
+    },
+    {
+      "name": "control: ordinary JSON POST to the same allowed host",
+      "method": "POST",
+      "path": "/v1/messages",
+      "content_type": "application/json",
+      "blocked": false,
+      "status": 200,
+      "rule_id": "http:default-allow",
+      "policy_layer": "system",
+      "body_digest": "sha256:b27b44f15a7278f518137403213b3c655c45152e05b400a90de85b854999c011",
+      "body_len": 33
+    }
+  ]
+}

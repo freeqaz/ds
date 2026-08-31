@@ -1,0 +1,1 @@
+{"ds_fixture":{"provenance":"synthetic","seam":"policy-packs/vcs-meta-poller","created":"2026-06-12","note":"hand-authored mirror of the DOCUMENTED api.github.com/meta JSON shape (doc 13 §3, D74); domains object carries the synthetic-pack vcs FQDNs verbatim, not a live capture"}}

@@ -1,0 +1,15 @@
+[package]
+name = "ds-policy-snapshot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The snapshot carries POL-1-derived host policy fields; the schema types + the
+# stdlib-only POL-1 reader live in ds-contracts (doc 13 §1 rule 1 / doc 14 §6
+# "interface homes fixed"). This is the snapshot-identity / POL-1-validation edge
+# the skeleton comment reserved. No control-plane client libraries: the one
+# WatchPolicies subscriber per host is the Go host agent (D72), never this crate;
+# tokio 1.x (hot-reload staging) lands with that work, not this field.
+ds-contracts = { path = "../ds-contracts" }

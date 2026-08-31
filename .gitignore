@@ -1,0 +1,60 @@
+# Rust build output (dataplane/Cargo.lock stays TRACKED — pin policy, D40/D67).
+dataplane/target/
+
+# Go build artifacts (binaries are never checked in).
+/ds
+/client/ds
+/client/serpent
+# stray binary from `go build ./...` run at the package parent; the real source
+# is orchestrator/cmd/host-agent/ (canonical build emits to .bin/).
+/orchestrator/host-agent
+bin/
+# go.work is tracked; go.work.sum is a regenerated workspace artifact.
+/go.work.sum
+# cargo's src/bin/ convention is source, not build output
+!dataplane/crates/**/src/bin/
+!dataplane/services/**/src/bin/
+*.test
+
+# taskdb — live store is gitignored; the committed store is tasks/*.json
+# (produced by `taskdb freeze`). See docs/21-taskdb-design.md.
+/.bin/
+# stray binary from `go build ./...` inside the package dir (canonical build is make taskdb → .bin/)
+/scripts/taskdb/taskdb
+/taskdb.sqlite
+/taskdb.sqlite-wal
+/taskdb.sqlite-shm
+# atomic-freeze temp files (write-temp-then-rename); only exist mid-write, but a
+# killed freeze can leak one — never let `git add tasks/` stage a partial.
+/tasks/.tmp-*
+
+# Editor / OS junk.
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+orchestrator-lite
+parse
+
+# Python bytecode.
+__pycache__/
+
+# SSH key for the optional taskdb lock-server SSH tunnel
+# (scripts/taskdb/lockserver.json). Never committed — provision out-of-band.
+/lock_key.pem
+
+# stray `go build ./cmd/X` outputs (built into ~/tmp/ds-nested/bin by build-dataplane-debian.sh)
+/orchestrator/cmd/ds-driver-e2e/ds-driver-e2e
+/orchestrator/cmd/host-agent/host-agent
+/orchestrator/cmd/orchestrator/orchestrator
+/client/cmd/ds-hostbridge/ds-hostbridge
+/infra/shims/govmomi/govmomi
+/identity/fakes/digest-publisher/digest-publisher
+/scripts/nested-testbed/ds-identity-validate-fake/ds-identity-validate-fake
+
+# uv-managed virtualenv for scripts/taskdb/searchsvc (also ignored by that
+# tree's own .gitignore; repeated here so a root-level `git add` can't stage it).
+/scripts/taskdb/searchsvc/.venv/

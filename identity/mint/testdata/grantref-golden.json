@@ -1,0 +1,21 @@
+{
+  "_comment": "GrantRef cross-module golden contract (doc 16 §5.1, §9 grant-fetch row). The grant_ref string is the ONLY thing identity/mint (the WRITER) and identity/grant-service (the READER) agree on across two standalone GOWORK=off modules. This fixture is carried IDENTICALLY in both modules' testdata/; mint's grants_test.go asserts FormatGrantRef(session, service) == ref (writer side); grant-service's grantref_test.go asserts ParseGrantRef(ref) == {session, service} (reader side). A unilateral format change on either side fails THAT side's suite against this shared golden. Synthetic only (D50): sessions are synthetic UUIDs, secrets appear nowhere — grant_ref is secret-free by construction.",
+  "format": "grant:<session_uuid>:<service_id>",
+  "cases": [
+    {
+      "session": "00000000-0000-4000-8000-000000000001",
+      "service": "github",
+      "ref": "grant:00000000-0000-4000-8000-000000000001:github"
+    },
+    {
+      "session": "00000000-0000-4000-8000-000000000001",
+      "service": "npm",
+      "ref": "grant:00000000-0000-4000-8000-000000000001:npm"
+    },
+    {
+      "session": "00000000-0000-4000-8000-0000000000f1",
+      "service": "github",
+      "ref": "grant:00000000-0000-4000-8000-0000000000f1:github"
+    }
+  ]
+}

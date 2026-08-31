@@ -1,0 +1,1 @@
+{"ds_fixture":{"provenance":"synthetic","seam":"guardrail-conformance/nftgate port-53-redirect-holds (doc 06 §3c; NFT-4)","created":"2026-06-13","note":"hand-authored port-53 case: destination-port-53 traffic aimed at a foreign resolver still lands on ds-dnsgate; resolver IP is a public well-known, never a live session destination (D50)."}}

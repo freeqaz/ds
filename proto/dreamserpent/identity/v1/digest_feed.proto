@@ -1,0 +1,265 @@
+// Identity -> Boundary secret-digest feed (D73/D84).
+//
+// The Stage-0 producer->boundary seam: Identity computes HMAC digests of every
+// credential it mints (tagged with the intended service + TTL) or guards (tagged
+// forbidden), and pushes them — plus their encoded variants — to the boundary
+// host so ds-tlsproxy's SecretMatcher can block a secret at first egress without
+// ever seeing the plaintext. Frozen entry shape + invariants: doc 14 §7; the
+// Stage-0 surface (entry + publish/revoke + ack) is stated once in doc 16 §6.6/§9.
+//
+// FROZEN INVARIANTS (doc 14 §7, D73) — doc-commented here because they are
+// contract law this wire surface must not be able to violate:
+//
+//   * PLAINTEXT NEVER CROSSES THE SEAM. The producer computes every digest
+//     inside the D39 secret-store trust zone; only the HMAC key id, the digest
+//     bytes, and the variant tag cross. No field on this seam carries, or can be
+//     made to carry, a credential plaintext (the contract is "digests, never
+//     secrets"). The boundary host holds only the HMAC key + the digests.
+//   * MINT-BEFORE-ATTACH. Session-scoped digests land — and are acked — before
+//     the session's first egress byte; the session is not routable until its
+//     digests are acked (DigestPublishResponse). Enforced by the orchestrator's
+//     session-create sequence, not by convention (doc 16 §6.1).
+//   * TEARDOWN FLUSH. Entries are flushed at session teardown (the NFT-6 hygiene
+//     pattern); per-entry expiry tracks the credential TTL so stale digests never
+//     linger past the cred they shadow.
+//   * FAIL-CLOSED WHENEVER THE KEYED PLANE IS LOADED. A digest-write/feed outage
+//     blocks inspected traffic rather than widening it; fail-open is an explicit
+//     policy bit permitted only for generic flag-only configs, never for the
+//     keyed plane (doc 16 §7). A failed publish stalls/fails session-create; it
+//     never degrades open.
+//
+// SCOPE CLASSIFICATION (D72/D73, frozen — doc 14 §7, doc 16 §6.2). This feed is
+// neither a second policy stream nor a second policy-version namespace:
+//
+//   * FLEET-scope registration/revocation is a POLICY ARTIFACT under the
+//     `policy_log` seq, delivered through the one-per-host WatchPolicies
+//     subscriber (D72), covered by the prepare/commit barrier and the revocation
+//     sweep, inheriting the POL-4 seconds-scale bar. It does NOT ride this RPC
+//     surface's session-lifecycle path — see DigestScope.DIGEST_SCOPE_FLEET.
+//   * SESSION-scope digests are SESSION-LIFECYCLE DATA (same class as the D17 CA
+//     mint and D22 grants), EXEMPT from the D72 policy-topology invariant. These
+//     are what DigestPublish/DigestRevoke carry on this seam, acked per
+//     DigestPublishResponse.
+//   * The DIGEST-SET VERSION carried in boundary verdict provenance is a SEPARATE
+//     NON-POLICY version namespace (doc 14 §2 `PolicyDecision` row) — recorded so
+//     LOG-4's version-chain assertion does not treat it as `policy_log` skew.
+//
+// Charter: this file owns ONLY the Digest*-prefixed digest-feed surface. The
+// sibling identity.v1 seams (Validate, CA mint, identity-plane LOG-1 events) live
+// in their own files and share this package; no name here collides with theirs.
+
+syntax = "proto3";
+
+package dreamserpent.identity.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/identity/v1;identityv1";
+
+// How a digest's bytes were derived from the credential plaintext (HMAC-SHA-256,
+// truncated). The truncation length is carried alongside so the boundary matcher
+// truncates candidates identically; the length is chosen to keep the false-positive
+// rate ≈ 0 at fleet digest counts (doc 16 §6.3).
+message DigestAlgo {
+  // Keyed-hash family. HMAC-SHA-256 is the only Stage-0 value; future families
+  // are additive enum values, never a field retype.
+  enum Family {
+    FAMILY_UNSPECIFIED = 0;
+    FAMILY_HMAC_SHA256 = 1;
+  }
+
+  Family family = 1;
+
+  // Truncation length in bytes applied to the keyed hash before comparison.
+  // Producer and boundary matcher MUST agree; carried so neither re-derives it.
+  uint32 truncation_len_bytes = 2;
+}
+
+// The credential class a digest belongs to (doc 14 §7).
+//   ISSUED{service_id}: a credential Identity minted, tagged with its intended
+//     service — egress to that service is expected; egress elsewhere is a
+//     wrong-destination event (block+log, D73).
+//   FORBIDDEN: a credential Identity guards — must never egress in any variant.
+// Modeled as a oneof so the ISSUED case carries its `service_id` and the
+// FORBIDDEN case carries no payload, without an out-of-band "which class" field.
+message DigestCredClass {
+  // Marker for the FORBIDDEN class (no payload — its presence in the oneof is
+  // the signal). A canary registered here is the doc 06 (c) "canary never
+  // egresses" assurance anchor (D73).
+  message Forbidden {}
+
+  // The ISSUED class: the registry `service_id` (doc 16 §5.1 `services[]` key)
+  // this credential is intended for.
+  message Issued {
+    string service_id = 1;
+  }
+
+  oneof class {
+    Issued issued = 1;
+    Forbidden forbidden = 2;
+  }
+}
+
+// Lifecycle scope of a digest (D72/D73 — see the SCOPE CLASSIFICATION header).
+enum DigestScope {
+  DIGEST_SCOPE_UNSPECIFIED = 0;
+  // Session-lifecycle data, D72-exempt; carried on THIS seam's publish/revoke
+  // RPCs and acked per DigestPublishResponse (mint-before-attach).
+  DIGEST_SCOPE_SESSION = 1;
+  // A policy artifact under the `policy_log` seq via the one-per-host
+  // WatchPolicies subscriber (D72). Present so a single entry shape serves both
+  // cadences; fleet registration/revocation does NOT ride this RPC surface's
+  // session-lifecycle path — it rides the policy stream (doc 16 §6.2). A
+  // fleet-scope entry appearing on DigestPublish is the producer stating the
+  // entry's class, not requesting session-path delivery.
+  DIGEST_SCOPE_FLEET = 2;
+}
+
+// The encoding variant a single digest was computed over. The producer pushes
+// every variant of a credential it expects could appear on the wire so the
+// boundary matches a base64'd or url-encoded secret as readily as the raw bytes
+// (doc 14 §7).
+enum DigestVariantTag {
+  DIGEST_VARIANT_TAG_UNSPECIFIED = 0;
+  DIGEST_VARIANT_TAG_RAW = 1;
+  DIGEST_VARIANT_TAG_BASE64 = 2;
+  DIGEST_VARIANT_TAG_URLENC = 3;
+  DIGEST_VARIANT_TAG_HEX = 4;
+}
+
+// One digest-feed entry — the frozen entry shape of doc 14 §7. A credential
+// pushed in N encodings yields N DigestEntry values sharing key_id/cred_class/
+// scope/expiry and differing only in `digest` + `variant_tag`.
+message DigestEntry {
+  // Id of the HMAC key the digest was computed under (per-host per-epoch, D73).
+  // Lets the boundary select the matching key; rotation re-pushes every live
+  // digest under the new key id (doc 16 §6.3). Never the key material.
+  string key_id = 1;
+
+  // The keyed-hash family + truncation length (above). NOT the plaintext.
+  DigestAlgo algo = 2;
+
+  // The truncated HMAC digest bytes. This is the only credential-derived value
+  // that crosses the seam — a one-way keyed hash, never reversible to plaintext.
+  bytes digest = 3;
+
+  // ISSUED{service_id} | FORBIDDEN.
+  DigestCredClass cred_class = 4;
+
+  // SESSION (this seam) | FLEET (policy stream) — see DigestScope.
+  DigestScope scope = 5;
+
+  // Absolute expiry; tracks the credential TTL so the boundary ages the entry
+  // out in lockstep with the cred it shadows (teardown-flush invariant).
+  google.protobuf.Timestamp expiry = 6;
+
+  // Which encoding the `digest` was computed over.
+  DigestVariantTag variant_tag = 7;
+}
+
+// Reference to the session a session-scoped publish/revoke/ack pertains to. The
+// orchestrator session record is the authority for the binding (doc 14 §4); the
+// digest feed carries the session uuid only to scope the mint-before-attach
+// ordering, never to attribute traffic.
+//
+// DELIBERATE THIN-LOCAL EXCEPTION to the freeze-PR session-ref unification: the
+// canonical `dreamserpent.boundary.v1.SessionRef` quartet carries attribution
+// machinery (host_id / host_session_index / tap_name) that the off-host producer
+// in the D39 trust zone cannot know and this seam must never need — so this seam
+// keeps the uuid-only shape by design rather than importing the canonical
+// message (recorded with the unification, 2026-06-12).
+message DigestSessionRef {
+  string session_uuid = 1;
+}
+
+// ----- publish ------------------------------------------------------------
+
+// Publish (register) a batch of digests. For DIGEST_SCOPE_SESSION this is the
+// mint-before-attach write: the session is not routable until the corresponding
+// DigestPublishResponse returns (doc 16 §6.1).
+message DigestPublishRequest {
+  // The session these entries are minted for, when scope is SESSION. Omitted/
+  // ignored for fleet-class entries (which ride the policy stream, not this path).
+  DigestSessionRef session = 1;
+
+  // The entries to register. A batch so a session's full digest set lands in one
+  // round trip ahead of first egress.
+  repeated DigestEntry entries = 2;
+
+  // Producer-chosen id correlating this publish with its DigestPublishResponse. The
+  // ack echoes it; it does NOT bake in a single-consumer assumption — the ack
+  // is per-consumer (see DigestPublishResponse), keeping the §6.5 multi-consumer
+  // door open without a buf-unsafe field addition later (doc 16 §6.6).
+  string batch_id = 3;
+}
+
+// Response to a publish — the publish ACK (STANDARD names it ...Response; it IS
+// the ack message of doc 16 §6.6). The ack-er is the D35 host agent, on behalf
+// of the host-side fan-out — ratified D109 (2026-06-12, closing doc 15 OQ1):
+// the host agent acks the D73 session-scoped digest write, proving host-wide
+// visibility before the session is marked routable. The session is marked
+// routable only once this returns committed for its session-scoped batch.
+//
+// Per-consumer by construction (doc 16 §6.5/§6.6): `consumer_id` names which
+// host-side consumer acked, so retrofitting multi-consumer never requires a
+// field addition to a single-consumer-shaped message (the buf-unsafe path the
+// §6.6 design constraint forbids).
+message DigestPublishResponse {
+  // Echo of DigestPublishRequest.batch_id.
+  string batch_id = 1;
+
+  // The session whose digests are now matchable (session scope).
+  DigestSessionRef session = 2;
+
+  // Which host-side consumer is acking. Mint-before-attach is satisfied when the
+  // host agent confirms host-wide visibility; this names the acking actor so the
+  // ack message never assumes exactly one consumer.
+  string consumer_id = 3;
+
+  // True iff every entry in the batch is registered and matchable. Fail-closed:
+  // a false here (or no ack) stalls/fails session-create — never routes open.
+  bool committed = 4;
+}
+
+// ----- revoke -------------------------------------------------------------
+
+// Revoke (delete) previously-published digests by key id. Session-scope
+// revocation rides this seam; fleet-scope revocation is a policy artifact under
+// the `policy_log` seq via the one-per-host subscriber (D72) and is recorded
+// here as scope, not delivered by this RPC (doc 16 §6.2).
+message DigestRevokeRequest {
+  // The session whose digests to revoke (session scope).
+  DigestSessionRef session = 1;
+
+  // Key ids of the entries to revoke. Revoking removes the matcher entries; the
+  // boundary's rung-conditional flush_session (D68/D72) handles established
+  // flows separately (doc 14 §5) — this RPC governs the digest set, not conntrack.
+  repeated string key_ids = 2;
+
+  // The scope of the entries being revoked (must be DIGEST_SCOPE_SESSION on this
+  // path; fleet revocation rides the policy stream).
+  DigestScope scope = 3;
+}
+
+// Response to a revoke — the revoke ack, symmetric with DigestPublishResponse so
+// the producer confirms the digests are gone host-wide before reusing their key
+// ids (STANDARD names it ...Response).
+message DigestRevokeResponse {
+  DigestSessionRef session = 1;
+  string consumer_id = 2;
+  // True iff every named key id is removed and no longer matchable.
+  bool committed = 3;
+}
+
+// The Identity->Boundary secret-digest feed (D73). Producer side: Identity (in
+// the D39 secret-store trust zone). Consumer side: the boundary host's digest
+// fan-out, acked by the D35 host agent. Plaintext never crosses; see the
+// file-level invariants.
+service DigestFeedService {
+  // Register session-scoped digests for a session; the session is not routable
+  // until the returned DigestPublishResponse.committed is true (mint-before-attach).
+  rpc DigestPublish(DigestPublishRequest) returns (DigestPublishResponse);
+
+  // Revoke session-scoped digests by key id; teardown and rotation use this.
+  rpc DigestRevoke(DigestRevokeRequest) returns (DigestRevokeResponse);
+}

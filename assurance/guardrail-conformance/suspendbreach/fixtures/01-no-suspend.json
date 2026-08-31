@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthetic NEGATIVE CONTROL (a): suspend-on-breach is regressed — a blocklist hit (a genuine threat that MUST suspend the VM mid-action) instead served an in-band error and let the VM ride through. A blocklist hit or an action:suspend rule must SUSPEND (D77, doc 03 §7 BIC). Must FAIL with the named class suspend-class-trip-did-not-suspend.",
+  "trips": [
+    { "name": "C2-domain blocklist hit", "class": "blocklist", "outcome": "in_band_error", "in_band_reason": true, "async_notify": true, "resume_latency_seconds": 0 }
+  ]
+}

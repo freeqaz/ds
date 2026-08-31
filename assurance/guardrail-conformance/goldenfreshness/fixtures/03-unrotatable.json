@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthetic VIOLATION (c): an UNROTATABLE golden. acme/monorepo@release is marked present but reports a negative age_hours, so the mtime-vs-now rotation verdict cannot be computed — an undecidable golden is a breach, never a silent pass. Must FAIL with the named class golden-rotation-verdict-undecidable.",
+  "policy": { "max_age_hours": 24 },
+  "goldens": [
+    { "repo": "acme/monorepo", "branch": "main",    "present": true, "age_hours": 5 },
+    { "repo": "acme/monorepo", "branch": "release", "present": true, "age_hours": -1 }
+  ]
+}

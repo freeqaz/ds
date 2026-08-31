@@ -1,0 +1,35 @@
+{
+  "_fixture": "SYNTHETIC — not a captured live response.",
+  "_shape": "Mirrors the DOCUMENTED api.github.com/meta JSON shape (doc 13 §3, D74): top-level IP/CIDR arrays are DIAGNOSTICS ONLY and the poller ignores them; the machine-readable domain source is the `domains` object (service -> [domain ...]).",
+  "_mirrors_pack": "The `domains` entries below are the synthetic-pack vcs FQDNs verbatim, so a diff against scripts/policy-packs/fixtures/baseline-pack.synthetic.json yields an EMPTY no-op diff. Test cases mutate a copy of this document to exercise added/removed/wildcard paths.",
+  "verifiable_password": "this-is-a-synthetic-fixture-not-a-credential",
+  "ssh_key_fingerprints": {
+    "SHA256_RSA": "SYNTHETIC-do-not-trust",
+    "SHA256_ED25519": "SYNTHETIC-do-not-trust"
+  },
+  "hooks": ["192.0.2.0/24", "198.51.100.0/24"],
+  "web": ["192.0.2.0/24"],
+  "api": ["192.0.2.0/24"],
+  "git": ["192.0.2.0/24"],
+  "github_enterprise_importer": ["192.0.2.0/24"],
+  "packages": ["192.0.2.0/24"],
+  "pages": ["192.0.2.0/24"],
+  "importer": ["192.0.2.0/24"],
+  "actions": ["192.0.2.0/24"],
+  "actions_macos": ["192.0.2.0/24"],
+  "codespaces": ["192.0.2.0/24"],
+  "dependabot": ["192.0.2.0/24"],
+  "copilot": ["192.0.2.0/24"],
+  "domains": {
+    "website": [
+      "github.com",
+      "api.github.com",
+      "codeload.github.com",
+      "raw.githubusercontent.com",
+      "objects.githubusercontent.com",
+      "release-assets.githubusercontent.com",
+      "github-releases.githubusercontent.com",
+      "github-registry-files.githubusercontent.com"
+    ]
+  }
+}

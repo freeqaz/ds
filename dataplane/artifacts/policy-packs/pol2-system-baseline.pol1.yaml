@@ -1,0 +1,380 @@
+# POL-2 — system default baseline policy pack (D64 / D74 v2).
+#
+# This is the versioned, named policy pack that ships with the open data plane
+# (Apache-2.0 per D25) so a fresh install is useful *and* bounded out of the box
+# (doc 09 §6 POL-2). It is an ordinary POL-1 v0 `system-baseline` layer document:
+# the `ds-contracts` stdlib reader (pol1::parse_layer) consumes it with zero
+# PolicyErrors, `policy-core` composes it, and the doc 09 §1 reachability set
+# admits through the SAME shared evaluator the three consumers embed (POL-3).
+#
+# There is nothing magic about these defaults except that they ship enabled: a
+# team can empty, extend, or replace any of this through the same engine.
+#
+# Contents per D74 v2 (doc 13 §3 "Baseline pack contents v2" table):
+#   enabled  : core / vcs / packages
+#   disabled : telemetry / binary-cdn / ghcr / lfs (disabled-by-default)
+# Every entry carries mandatory provenance (source URL + pinning verdict, D74);
+# the D17 pass-through list ships EMPTY; the known public DoH/DoT resolver
+# domains ship in the blocklist (blocklists always win); upstream resolvers are
+# host-side egress for ds-dnsgate's OWN queries only (in-VM packets at these IPs
+# still redirect into our resolver, NFT-4).
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+
+# ── Admission timers (D68) — policy values, not code constants ─────────────
+admission:
+  ttl_floor: 60
+  ttl_ceil: 900
+  grace: 60
+  max_ips_per_domain: 1000
+  per_domain_overrides:
+    # Anthropic publishes fixed ranges ("will not change without notice"), so an
+    # IP-stable endpoint may pin a longer clamp (doc 13 §3).
+    - domain: api.anthropic.com
+      ttl_ceil: 3600
+
+# ── DNS semantics (D71 / D64) ───────────────────────────────────────────────
+dns:
+  negative_ttl: 5
+  # ds-dnsgate's OWN upstream egress only — host-side, NEVER granted to VMs.
+  # In-VM packets aimed at these IPs are still redirected into our resolver
+  # (NFT-4); the baseline never grants the VM direct resolver access (D64).
+  upstream_resolvers:
+    - 1.1.1.1
+    - 8.8.8.8
+
+# ── QUIC / udp443 (D70) ─────────────────────────────────────────────────────
+quic:
+  reject_counter: true
+  canary_latency_budget_ms: 250
+  trigger_eval: weekly
+
+# ── Baseline endpoint pack v2 (D74; refines D64) ────────────────────────────
+baseline_pack:
+  # Content identity cited in POL-3 provenance — NOT a version namespace (rule 3).
+  pack_version: "2026.06.11-v2"
+  families:
+    # Tier defaults are FROZEN (D74); flipping a tier is ordinary org policy.
+    core: { tier: enabled }
+    vcs: { tier: enabled }
+    packages: { tier: enabled }
+    telemetry: { tier: disabled }
+    binary-cdn: { tier: disabled }
+    ghcr: { tier: disabled }
+    lfs: { tier: disabled }
+  entries:
+    # ── core (enabled) — the agent's own model calls ───────────────────────
+    # All three front one IP (160.79.104.10): SNI-keyed admission is load-bearing
+    # even here. downloads.claude.ai is EXCLUDED from the session pack — the
+    # golden image pins Claude Code >=2.1.116 with auto-update disabled (D74).
+    - fqdn: api.anthropic.com
+      family: core
+      ports: [443]
+      provenance_source_url: https://code.claude.com/docs/en/network-config
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc; not cert-pinned (no TLS-3 pinning failure reproduced)
+    - fqdn: claude.ai
+      family: core
+      ports: [443]
+      provenance_source_url: https://code.claude.com/docs/en/network-config
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc; not cert-pinned (no TLS-3 pinning failure reproduced)
+    - fqdn: platform.claude.com
+      family: core
+      ports: [443]
+      provenance_source_url: https://code.claude.com/docs/en/network-config
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc; not cert-pinned (no TLS-3 pinning failure reproduced)
+
+    # ── vcs (enabled) — the endpoints a clone/fetch/push actually touches ───
+    # machine_source: api.github.com/meta `domains` object (the only machine-
+    # readable vendor source); /meta IP arrays are never used for authorization.
+    - fqdn: github.com
+      family: vcs
+      ports: [443]
+      provenance_source_url: https://api.github.com/meta
+      machine_source: https://api.github.com/meta
+      passthrough: false
+      evidence: vendor-meta (github /meta domains object); not cert-pinned
+    - fqdn: api.github.com
+      family: vcs
+      ports: [443]
+      provenance_source_url: https://api.github.com/meta
+      machine_source: https://api.github.com/meta
+      passthrough: false
+      evidence: vendor-meta (github /meta domains object); not cert-pinned
+    - fqdn: codeload.github.com
+      family: vcs
+      ports: [443]
+      provenance_source_url: https://api.github.com/meta
+      machine_source: https://api.github.com/meta
+      passthrough: false
+      evidence: vendor-meta (github /meta domains object); not cert-pinned
+    - fqdn: raw.githubusercontent.com
+      family: vcs
+      ports: [443]
+      provenance_source_url: https://api.github.com/meta
+      machine_source: https://api.github.com/meta
+      passthrough: false
+      evidence: vendor-meta (github /meta domains object); not cert-pinned
+    - fqdn: objects.githubusercontent.com
+      family: vcs
+      ports: [443]
+      provenance_source_url: https://api.github.com/meta
+      machine_source: https://api.github.com/meta
+      passthrough: false
+      evidence: vendor-meta (github /meta domains object); not cert-pinned
+    - fqdn: release-assets.githubusercontent.com
+      family: vcs
+      ports: [443]
+      provenance_source_url: https://api.github.com/meta
+      machine_source: https://api.github.com/meta
+      passthrough: false
+      evidence: vendor-meta (github /meta domains object); not cert-pinned
+    - fqdn: github-releases.githubusercontent.com
+      family: vcs
+      ports: [443]
+      provenance_source_url: https://api.github.com/meta
+      machine_source: https://api.github.com/meta
+      passthrough: false
+      evidence: vendor-meta (github /meta domains object); not cert-pinned
+    - fqdn: github-registry-files.githubusercontent.com
+      family: vcs
+      ports: [443]
+      provenance_source_url: https://api.github.com/meta
+      machine_source: https://api.github.com/meta
+      passthrough: false
+      evidence: vendor-meta (github /meta domains object); not cert-pinned
+
+    # ── packages (enabled) — registries the runtimes install from ──────────
+    # npm registry is the canonical CNAME-chain / CDN-shared-IP test case.
+    - fqdn: registry.npmjs.org
+      family: packages
+      ports: [443]
+      provenance_source_url: https://docs.npmjs.com/cli/v10/using-npm/registry
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc (npm registry); not cert-pinned
+    - fqdn: registry.yarnpkg.com
+      family: packages
+      ports: [443]
+      provenance_source_url: https://yarnpkg.com/configuration/yarnrc#npmRegistryServer
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc (yarn registry); not cert-pinned
+    - fqdn: nodejs.org
+      family: packages
+      ports: [443]
+      provenance_source_url: https://nodejs.org/en/download
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc (node headers / dist); not cert-pinned
+
+    # ── Go + Rust toolchain endpoints (2026-07-29, dream-serpent self-dev) ──
+    # The platform's own trees are Go (go.work: orchestrator/ client/ vm/ proto/)
+    # and Rust (dataplane/), so a session doing self-development cannot resolve a
+    # dependency without these. Deliberately NARROW: the module/crate protocol
+    # endpoints only — no toolchain *installers* (go.dev/dl, static.rust-lang.org,
+    # sh.rustup.rs), because the image ships its toolchains and an agent that can
+    # fetch and run a new toolchain is a materially larger surface than one that
+    # can fetch source dependencies.
+    - fqdn: proxy.golang.org
+      family: packages
+      ports: [443]
+      provenance_source_url: https://go.dev/ref/mod#module-proxy
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc (Go module proxy protocol, GOPROXY default); not cert-pinned
+    - fqdn: sum.golang.org
+      family: packages
+      ports: [443]
+      provenance_source_url: https://go.dev/ref/mod#checksum-database
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc (Go checksum database, GOSUMDB default); not cert-pinned
+    - fqdn: index.crates.io
+      family: packages
+      ports: [443]
+      provenance_source_url: https://doc.rust-lang.org/cargo/reference/registry-index.html
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc (cargo sparse index, default since Rust 1.70); not cert-pinned
+    - fqdn: static.crates.io
+      family: packages
+      ports: [443]
+      provenance_source_url: https://doc.rust-lang.org/cargo/reference/registries.html
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc (crates.io .crate download host); not cert-pinned
+    - fqdn: crates.io
+      family: packages
+      ports: [443]
+      provenance_source_url: https://doc.rust-lang.org/cargo/reference/registries.html
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc (crates.io registry API); not cert-pinned
+
+    # ── telemetry (DISABLED by default) ────────────────────────────────────
+    # Golden image sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1. This is the
+    # D74 ENDPOINT-FAMILY knob (may the VM REACH the telemetry FQDNs), NOT the
+    # per-D19 telemetry-EXPORT consent gate. `*.sentry.io` is the only vendor-
+    # published-shaped wildcard in the pack (D74 vendor-exclusive exception).
+    # `statsig.anthropic.com` is NXDOMAIN (the D74 staleness lesson) — successor
+    # TBD by the OQ9 empirical pass; deliberately NOT shipped while stale.
+    - fqdn: sentry.io
+      family: telemetry
+      ports: [443]
+      provenance_source_url: https://docs.sentry.io/concepts/key-terms/dsn-explainer/
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc (sentry ingest); not cert-pinned
+    - fqdn: "*.sentry.io"
+      family: telemetry
+      ports: [443]
+      provenance_source_url: https://docs.sentry.io/concepts/key-terms/dsn-explainer/
+      machine_source: null
+      passthrough: false
+      evidence: vendor-published vendor-exclusive wildcard (D74 exception); not cert-pinned
+
+    # ── binary-cdn (DISABLED by default) ───────────────────────────────────
+    # Golden image pre-bakes Playwright / Chrome-for-Testing browsers + node
+    # headers, so this tier is rarely exercised. storage.googleapis.com is ONLY
+    # ever path-scoped behind `requires: http-policy` — INERT (admits nothing)
+    # until TLS-6 lands; the §1 reachability test must not depend on it.
+    - fqdn: cdn.playwright.dev
+      family: binary-cdn
+      ports: [443]
+      provenance_source_url: https://playwright.dev/docs/browsers
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc (playwright browser CDN); not cert-pinned
+    - fqdn: playwright.download.prss.microsoft.com
+      family: binary-cdn
+      ports: [443]
+      provenance_source_url: https://playwright.dev/docs/browsers
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc (playwright browser CDN); not cert-pinned
+    - fqdn: googlechromelabs.github.io
+      family: binary-cdn
+      ports: [443]
+      provenance_source_url: https://googlechromelabs.github.io/chrome-for-testing/
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc (chrome-for-testing); not cert-pinned
+    - fqdn: download.cypress.io
+      family: binary-cdn
+      ports: [443]
+      provenance_source_url: https://docs.cypress.io/app/references/proxy-configuration
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc (cypress download); not cert-pinned
+    - fqdn: storage.googleapis.com
+      family: binary-cdn
+      ports: [443]
+      path_scope: ["/chrome-for-testing-public/*"]
+      requires: http-policy
+      provenance_source_url: https://raw.githubusercontent.com/puppeteer/puppeteer/main/packages/browsers/src/browser-data/chrome.ts
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc (puppeteer browser-data); host-wide rejected, path-scoped only; not cert-pinned
+
+    # ── ghcr (DISABLED by default) ─────────────────────────────────────────
+    # Blob host community-sourced; confirm in the OQ9 empirical pass.
+    - fqdn: ghcr.io
+      family: ghcr
+      ports: [443]
+      provenance_source_url: https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry
+      machine_source: null
+      passthrough: false
+      evidence: vendor-doc (github container registry); community-sourced blob host; not cert-pinned
+    - fqdn: pkg-containers.githubusercontent.com
+      family: ghcr
+      ports: [443]
+      provenance_source_url: https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry
+      machine_source: null
+      passthrough: false
+      evidence: community-sourced (ghcr blob host); confirm in OQ9 pass; not cert-pinned
+
+    # ── lfs (DISABLED by default) ──────────────────────────────────────────
+    # GitHub disclaims /meta completeness for LFS; community knowledge.
+    - fqdn: github-cloud.githubusercontent.com
+      family: lfs
+      ports: [443]
+      provenance_source_url: https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-git-large-file-storage
+      machine_source: null
+      passthrough: false
+      evidence: community-sourced (git-lfs); github disclaims /meta LFS completeness; not cert-pinned
+    - fqdn: github-cloud.s3.amazonaws.com
+      family: lfs
+      ports: [443]
+      provenance_source_url: https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-git-large-file-storage
+      machine_source: null
+      passthrough: false
+      evidence: community-sourced (git-lfs S3 backend); not cert-pinned
+
+# ── Blocklist — always wins (deny-overrides) ────────────────────────────────
+# The known public DoH/DoT resolver domains: a VM must not resolve names out of
+# band. A block-or-higher rung severs established flows on revocation (§5), so
+# DNS-3 denial + the TLS-1 SNI check enforce the DoH/DoT block from Stage 2.
+blocklist:
+  - domain: dns.google
+    reason: doh-resolver
+    rung: block+log
+  - domain: dns.google.com
+    reason: doh-resolver
+    rung: block+log
+  - domain: cloudflare-dns.com
+    reason: doh-resolver
+    rung: block+log
+  - domain: mozilla.cloudflare-dns.com
+    reason: doh-resolver
+    rung: block+log
+  - domain: one.one.one.one
+    reason: dot-resolver
+    rung: block+log
+  - domain: dns.quad9.net
+    reason: doh-resolver
+    rung: block+log
+  - domain: dns9.quad9.net
+    reason: dot-resolver
+    rung: block+log
+  - domain: dns.nextdns.io
+    reason: doh-resolver
+    rung: block+log
+  - domain: doh.opendns.com
+    reason: doh-resolver
+    rung: block+log
+  - domain: dns.adguard-dns.com
+    reason: doh-resolver
+    rung: block+log
+  - domain: doh.cleanbrowsing.org
+    reason: doh-resolver
+    rung: block+log
+
+# ── Pass-through list (D74 / D17) ───────────────────────────────────────────
+# Ships EMPTY — an entry requires attached reproduction evidence of a pinning
+# failure under TLS-3 inspection (shrinkage-biased list).
+passthrough: []
+
+# ── Credential-swap service registry (TLS-5 / D8) ───────────────────────────
+services:
+  - service: github
+    hosts: [github.com, api.github.com]
+    credential: { location: header, name: Authorization }
+
+# ── Ask-user defaults (D53 / D78) ───────────────────────────────────────────
+ask:
+  unknown_domain: ask
+  unattended_downgrade: block
+  attendedness:
+    activity_window_minutes: 10
+
+# ── IPv6 (D75 — HYBRID) ─────────────────────────────────────────────────────
+ipv6:
+  phase: b
+  synthetic_a_pool: 198.18.0.0/15

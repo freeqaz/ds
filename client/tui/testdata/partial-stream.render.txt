@@ -1,0 +1,10 @@
+::session attached  model=claude-sonnet-4-6  runtime=2.1.173  perm=bypassPermissions  cwd=/work  tools=[Bash]
+--state -> WORKING (requesting)
+ ~thinking: I will run one native command.
+$ tool Bash  {"command":"printf hi"}
+= tool ok: hi
+> assistant: hi
+% quota session allowed (provisional)
+==session success turns=2 dur=3100ms reason=completed
+--state -> ATTACHED (turn_complete)
+[ session 000000000004 | state ATTACHED | success | seq 9 ]

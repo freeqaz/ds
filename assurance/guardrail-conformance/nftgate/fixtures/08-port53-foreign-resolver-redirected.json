@@ -1,0 +1,7 @@
+{
+  "row": "port-53-redirect-holds",
+  "kind": "port-53-resolution",
+  "dst_ip": "8.8.8.8",
+  "want": "redirect-to-ds-dnsgate",
+  "why": "port-53 redirect holds: destination-port-53 traffic aimed at a foreign resolver (in-VM `nameserver 8.8.8.8`) still lands on ds-dnsgate no matter what IP the VM aimed at (NFT-4); the foreign-resolver bypass never holds"
+}

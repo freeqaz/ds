@@ -1,0 +1,7 @@
+{
+  "row": "ipv6-closure-dormant-posture-holds",
+  "kind": "aaaa-query-dormant-v6",
+  "domain": "api.allowed.example",
+  "want": "strip-aaaa-noerror-nodata",
+  "why": "dormant-v6 posture: an AAAA query is stripped and answered NOERROR/NODATA with the D71-authored SOA (never dropped / SERVFAIL), so the guest is handed no v6 address and the allow6 sets stay dormant (doc 06 §3c v6-closure; DNS-1, D75)"
+}

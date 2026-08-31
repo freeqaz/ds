@@ -1,0 +1,34 @@
+// SYNTHETIC NEGATIVE-CONTROL FIXTURE — NOT a real source file, NOT compiled,
+// NOT imported by anything. It exists ONLY to prove the D33 cloud-coupling
+// scan (scripts/release/cloud-coupling-scan.sh) has teeth: the scan MUST flag
+// this file (exit non-zero), demonstrating that a deliberately cloud-coupled
+// change to the OSS data plane is REJECTED at the release-vanilla-metal gate.
+//
+// D50: this is a SYNTHETIC fixture only — it makes NO live cloud calls and is
+// never built or linked. It deliberately embeds the cloud-SDK import paths and
+// cloud metadata endpoints from the deny-list so the scan's --self-test asserts
+// every deny-list lens fires. If you ADD a cloud coupling to the real OSS data
+// plane, the scan flags it the same way it flags this file, and the release is
+// blocked until the coupling is removed (or moved behind a service boundary per
+// D80, like the capability-flagged ec2demo control-plane driver).
+//
+// --- DELIBERATELY cloud-coupled lines the scan must flag (one per deny entry) ---
+
+// AWS SDK for Go (v1 and v2) + the v2 transport runtime:
+import _ "github.com/aws/aws-sdk-go/aws/session"
+import _ "github.com/aws/aws-sdk-go-v2/config"
+import _ "github.com/aws/smithy-go"
+
+// Google Cloud client libraries + the GCE compute API client:
+import _ "cloud.google.com/go/storage"
+import _ "google.golang.org/api/compute/v1"
+
+// Azure SDK for Go + the autorest runtime:
+import _ "github.com/Azure/azure-sdk-for-go/sdk/azcore"
+import _ "github.com/Azure/go-autorest/autorest"
+
+// Cloud instance-metadata endpoints (provider-agnostic coupling — a data plane
+// that reads these is reaching for a cloud it must not depend on):
+const ec2IMDS = "http://169.254.169.254/latest/meta-data/"
+const gceMetadata = "http://metadata.google.internal/computeMetadata/v1/"
+const ec2InternalHost = "instance-data.ec2.internal"

@@ -1,0 +1,25 @@
+# drift class: COMPOUND — both reader surfaces drift at once, under INDEPENDENT
+#   causes. The blocklist is a flow-style sequence (resolver-lock SHAPE drift)
+#   AND a guardrail rule declares an unknown rung token (POL-1 SCHEMA drift).
+# named edge shape: flow-style blocklist (Go) + bad guardrail rung token (Rust).
+# expected verdict (go, rust) = (reject, reject)  <-- compound both-reject, DIFFERENT causes
+# Go: ErrUnsupportedShape — the hand-rolled stdlib line scanner only models
+#     block-style `- domain:` items; a flow opener (`blocklist: [a, b]`) on the
+#     key line is a shape it cannot harvest, so it fails loudly. This is a
+#     resolver-lock SHAPE rejection; the Go scanner never reads guardrails, so the
+#     bad rung token is invisible to it.
+# Rust: BadRung — parse_layer DOES model inline flow sequences, so the flow
+#     blocklist of bare scalars yields zero entries with no error; the rejection
+#     comes from Rung::parse("nuke+orbit") on the guardrail rule (POL-1 schema, the
+#     D53 ladder {allow+log, block+log, suspend+ask, kill+snapshot}), a cause the
+#     Go side cannot see. The two causes are INDEPENDENT: the Go cause is the
+#     flow-style blocklist SHAPE, the Rust cause is the guardrail rung token value.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+guardrails:
+  - id: egress-rate-1
+    class: egress
+    rung: nuke+orbit
+blocklist: [dns.example, dot.example]
+passthrough: []

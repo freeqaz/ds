@@ -1,0 +1,278 @@
+// The per-session grant-FETCH protocol — the M1/D55 swap rider deferred by
+// grants.proto (doc 16 §5.1/§5.2/§9; D39/D76/D8/D85).
+//
+// WHAT THIS IS. A new `GrantFetchService` with a single `Fetch` RPC and its
+// request/response messages, added to the already-FROZEN
+// `dreamserpent.identity.v1` package. Identity owns the grant model behind the
+// fetch — doc 16 §5.2/§9 grant-fetch row: "Identity owns the validation
+// semantics, the grant model behind the fetch, and the registry content" — so
+// the fetch seam is Identity's, in the same package that already holds the D22
+// `Validate` (validate.proto), the mint RPCs (ca_mint.proto), and the grant
+// RECORD (grants.proto). The sole listed consumer is the ds-tlsproxy SWAP
+// EXECUTOR (doc 16 §9 grant-fetch row: "Consumers: ds-tlsproxy swap executor";
+// doc 12 §13.3).
+//
+// ADDITIVE / BUF-SAFE — NOT a re-freeze, NOT a break. A new service + new
+// messages on a flipped package is buf-safe by construction — the exact path the
+// D111 Mint-RPC promotions and the grants.proto `GrantSet` promotion used (a new
+// service + new messages is additive where a field on a frozen message is not).
+// `buf breaking` against the pre-existing baseline passes (non-breaking); the
+// baseline is regenerated to the new state and the generated fakes re-emit to
+// cover `Fetch`. Per FREEZE.md the addition is still ONE-SHOT: a field missed at
+// promotion is a v2-package event, not a patch — so the message field-number
+// ranges below reserve generously for forward growth.
+//
+// PROVENANCE / TIMING. doc 16 §9 grant-fetch row schedules this "with the M1
+// credential-swap design (alongside the D55 Vault spec)" — i.e. now (M1).
+// grants.proto's own header explicitly defers the FETCH protocol to "the SEPARATE
+// M1/D55 rider," which is this seam; grants.proto carries only the grant RECORD
+// and the opaque, secret-free `grant_ref` this fetch keys on.
+//
+// FAITHFUL MIRROR. Every request/response field maps to a concrete element of
+// `identity/grant-service`: the RPC mirrors
+// `Service.Fetch(sessionUUID, serviceID, grantRef string, grantExpiry time.Time)
+// (Credential, error)` (service.go); `FetchedCredential{secret, location}`
+// mirrors `Credential{Secret []byte, Location string}` (backend.go); the
+// fail-closed grant_ref re-derivation mirrors `grantref.go`
+// grantRefMatches/ParseGrantRef + ErrGrantRefMismatch; the deliberate
+// stall-vs-deny error split mirrors backend.go ErrStoreUnavailable vs
+// ErrGrantNotFound plus service.go ErrSessionNotLive/errParkedSession. The one
+// place this proto INTENTIONALLY diverges from a literal Go transcription is
+// SCOPE: it exposes ONLY `Fetch` (not Suspend/Park/Resume/RegisterSession),
+// because doc 16 §9 scopes the seam to the per-session fetch and routes lifecycle
+// over other seams — see the OPEN-QUESTION DEFAULTS below. A later Go repoint of
+// `identity/grant-service` onto these generated types is a SEPARATE mechanical
+// follow-up; these generated types are unused until then (the M0 fakes-first
+// pattern, doc 05 OQ3).
+//
+// OPEN-QUESTION DEFAULTS (recorded here + in FREEZE.md/README for post-hoc
+// seam-owner confirmation; each chosen so a later change stays ADDITIVE):
+//   1. FETCH-ONLY / NO LIFECYCLE RPC. The Go `Service` also has
+//      Suspend/Park/Resume/RegisterSession (service.go), but doc 16 §9 scopes the
+//      SEAM to the per-session fetch only — the lifecycle transitions are driven
+//      by the consumed suspend signal / D46 park budget (doc 16 §10) and
+//      RegisterSession is fed by the mint sub-sequence (§6.1). DEFAULT:
+//      `GrantFetchService` exposes ONLY `Fetch`; lifecycle stays
+//      orchestrator-driven over existing seams (errParkedSession /
+//      ErrSessionNotLive surface as Fetch REASONS, not RPCs). Adding a lifecycle
+//      RPC later is additive (safe); a missed lifecycle FIELD on the Fetch
+//      messages would be a v2 event — hence the generous reservations below.
+//   2. IN-BAND MACHINE-READABLE REASON. The five Go errors ride an in-band
+//      `GrantFetchReason` enum field on `GrantFetchResponse` (field 5), mirroring
+//      validate.proto's in-band `ValidateResponse.machine_readable_reason`
+//      precedent, so the executor distinguishes a STALL (store down — retry) from
+//      a DENY (not-found / not-live — fail closed) on the wire. The alternative
+//      (pure gRPC status code + detail, no field) needs no reservation; picking
+//      the in-band shape is a field-reservation decision this freeze locks.
+//   3. grant_expiry REQUEST-INPUT + RESPONSE-ECHO. `grant_expiry` is both a
+//      request input (the caller already knows it from the preceding Validate
+//      ALLOW) and a response echo. The request field mirrors service.go (the
+//      caller passes grantExpiry; the store does not return it); the response
+//      echo is additive convenience so the response is self-contained. Kept as
+//      the impl-faithful default; not a blocker.
+
+// Code generated by protoc-gen-go-grpc. DO NOT EDIT.
+// versions:
+// - protoc-gen-go-grpc v1.5.1
+// - protoc             (unknown)
+// source: dreamserpent/identity/v1/grant_fetch.proto
+
+package identityv1
+
+import (
+	context "context"
+	grpc "google.golang.org/grpc"
+	codes "google.golang.org/grpc/codes"
+	status "google.golang.org/grpc/status"
+)
+
+// This is a compile-time assertion to ensure that this generated file
+// is compatible with the grpc package it is being compiled against.
+// Requires gRPC-Go v1.64.0 or later.
+const _ = grpc.SupportPackageIsVersion9
+
+const (
+	GrantFetchService_Fetch_FullMethodName = "/dreamserpent.identity.v1.GrantFetchService/Fetch"
+)
+
+// GrantFetchServiceClient is the client API for GrantFetchService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// GrantFetchService is the per-session grant-FETCH seam (doc 16 §5.1/§5.2/§9;
+// D39). The `GrantFetch` name in doc 16's prose is rendered here with the proto
+// house-style `Service` suffix (buf STANDARD); the seam identity is the D39
+// fetch contract, unchanged — the same `IdentityValidation`→`Service` /
+// `IdentityMint`→`Service` precedent in this package.
+//
+// SOLE CONSUMER: the ds-tlsproxy SWAP EXECUTOR, which runs boundary-side / off-VM
+// in the virtual-metal host netns (doc 16 §2 diagram; doc 16 §9 grant-fetch row
+// "Consumers: ds-tlsproxy swap executor"; doc 12 §13.3) — precisely the module
+// the agent inside the VM cannot reach.
+//
+// PER-SESSION, NEVER PER-REQUEST (doc 16 §5.1; D39). The swap executor calls
+// `Fetch` once per (session × service) on a cache MISS and rides its own
+// ≤-session cache afterward (service.go), so steady-state swapped requests pay
+// zero added RTT beyond the in-line `Validate` hop (doc 16 §5.1). This is the
+// load-bearing availability property: a store outage stalls only NEW fetches; an
+// in-flight session whose grant is cached never consults the backend again.
+type GrantFetchServiceClient interface {
+	// Fetch returns the REAL swap-class credential for one
+	// (session_uuid, service_id, grant_ref) binding, bounded by the grant TTL
+	// (doc 16 §5.1/§9). Mirrors `Service.Fetch(sessionUUID, serviceID, grantRef,
+	// grantExpiry)(Credential, error)` (service.go) field-for-field.
+	//
+	// SYNC, per-session: a single in-line call on the swap path's cache-miss leg
+	// (doc 16 §5.1). The real credential it returns crosses ONLY to the off-VM swap
+	// executor (D8/D39 — see GrantFetchResponse.credential).
+	//
+	// FAILURE SURFACE: the five Go errors surface as distinct `GrantFetchReason`
+	// values in-band on `GrantFetchResponse.reason` (open-question default #2), so
+	// the executor distinguishes a STALL (REASON_STORE_UNAVAILABLE — retry) from a
+	// DENY (REASON_GRANT_NOT_FOUND / REASON_SESSION_NOT_LIVE / REASON_SESSION_PARKED
+	// / REASON_GRANT_REF_MISMATCH — fail closed), preserving backend.go's
+	// deliberate ErrStoreUnavailable-vs-ErrGrantNotFound split on the wire (§5.1).
+	//
+	// The request/response are named `GrantFetchRequest`/`GrantFetchResponse`
+	// (not buf STANDARD's `FetchRequest`/`FetchResponse`) to mirror the design's
+	// load-bearing vocabulary and disambiguate against the `MintGrants`/`Validate`
+	// surfaces in this same package — the same allowance ca_mint.proto's
+	// `MintGrants`→`GrantSet` and the FROZEN auth.v1 RPCs take. The two STANDARD
+	// name rules are ignored on this one line for that reason.
+	// buf:lint:ignore RPC_REQUEST_STANDARD_NAME
+	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+	Fetch(ctx context.Context, in *GrantFetchRequest, opts ...grpc.CallOption) (*GrantFetchResponse, error)
+}
+
+type grantFetchServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewGrantFetchServiceClient(cc grpc.ClientConnInterface) GrantFetchServiceClient {
+	return &grantFetchServiceClient{cc}
+}
+
+func (c *grantFetchServiceClient) Fetch(ctx context.Context, in *GrantFetchRequest, opts ...grpc.CallOption) (*GrantFetchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GrantFetchResponse)
+	err := c.cc.Invoke(ctx, GrantFetchService_Fetch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GrantFetchServiceServer is the server API for GrantFetchService service.
+// All implementations must embed UnimplementedGrantFetchServiceServer
+// for forward compatibility.
+//
+// GrantFetchService is the per-session grant-FETCH seam (doc 16 §5.1/§5.2/§9;
+// D39). The `GrantFetch` name in doc 16's prose is rendered here with the proto
+// house-style `Service` suffix (buf STANDARD); the seam identity is the D39
+// fetch contract, unchanged — the same `IdentityValidation`→`Service` /
+// `IdentityMint`→`Service` precedent in this package.
+//
+// SOLE CONSUMER: the ds-tlsproxy SWAP EXECUTOR, which runs boundary-side / off-VM
+// in the virtual-metal host netns (doc 16 §2 diagram; doc 16 §9 grant-fetch row
+// "Consumers: ds-tlsproxy swap executor"; doc 12 §13.3) — precisely the module
+// the agent inside the VM cannot reach.
+//
+// PER-SESSION, NEVER PER-REQUEST (doc 16 §5.1; D39). The swap executor calls
+// `Fetch` once per (session × service) on a cache MISS and rides its own
+// ≤-session cache afterward (service.go), so steady-state swapped requests pay
+// zero added RTT beyond the in-line `Validate` hop (doc 16 §5.1). This is the
+// load-bearing availability property: a store outage stalls only NEW fetches; an
+// in-flight session whose grant is cached never consults the backend again.
+type GrantFetchServiceServer interface {
+	// Fetch returns the REAL swap-class credential for one
+	// (session_uuid, service_id, grant_ref) binding, bounded by the grant TTL
+	// (doc 16 §5.1/§9). Mirrors `Service.Fetch(sessionUUID, serviceID, grantRef,
+	// grantExpiry)(Credential, error)` (service.go) field-for-field.
+	//
+	// SYNC, per-session: a single in-line call on the swap path's cache-miss leg
+	// (doc 16 §5.1). The real credential it returns crosses ONLY to the off-VM swap
+	// executor (D8/D39 — see GrantFetchResponse.credential).
+	//
+	// FAILURE SURFACE: the five Go errors surface as distinct `GrantFetchReason`
+	// values in-band on `GrantFetchResponse.reason` (open-question default #2), so
+	// the executor distinguishes a STALL (REASON_STORE_UNAVAILABLE — retry) from a
+	// DENY (REASON_GRANT_NOT_FOUND / REASON_SESSION_NOT_LIVE / REASON_SESSION_PARKED
+	// / REASON_GRANT_REF_MISMATCH — fail closed), preserving backend.go's
+	// deliberate ErrStoreUnavailable-vs-ErrGrantNotFound split on the wire (§5.1).
+	//
+	// The request/response are named `GrantFetchRequest`/`GrantFetchResponse`
+	// (not buf STANDARD's `FetchRequest`/`FetchResponse`) to mirror the design's
+	// load-bearing vocabulary and disambiguate against the `MintGrants`/`Validate`
+	// surfaces in this same package — the same allowance ca_mint.proto's
+	// `MintGrants`→`GrantSet` and the FROZEN auth.v1 RPCs take. The two STANDARD
+	// name rules are ignored on this one line for that reason.
+	// buf:lint:ignore RPC_REQUEST_STANDARD_NAME
+	// buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+	Fetch(context.Context, *GrantFetchRequest) (*GrantFetchResponse, error)
+	mustEmbedUnimplementedGrantFetchServiceServer()
+}
+
+// UnimplementedGrantFetchServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedGrantFetchServiceServer struct{}
+
+func (UnimplementedGrantFetchServiceServer) Fetch(context.Context, *GrantFetchRequest) (*GrantFetchResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Fetch not implemented")
+}
+func (UnimplementedGrantFetchServiceServer) mustEmbedUnimplementedGrantFetchServiceServer() {}
+func (UnimplementedGrantFetchServiceServer) testEmbeddedByValue()                           {}
+
+// UnsafeGrantFetchServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to GrantFetchServiceServer will
+// result in compilation errors.
+type UnsafeGrantFetchServiceServer interface {
+	mustEmbedUnimplementedGrantFetchServiceServer()
+}
+
+func RegisterGrantFetchServiceServer(s grpc.ServiceRegistrar, srv GrantFetchServiceServer) {
+	// If the following call pancis, it indicates UnimplementedGrantFetchServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&GrantFetchService_ServiceDesc, srv)
+}
+
+func _GrantFetchService_Fetch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GrantFetchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GrantFetchServiceServer).Fetch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GrantFetchService_Fetch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GrantFetchServiceServer).Fetch(ctx, req.(*GrantFetchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// GrantFetchService_ServiceDesc is the grpc.ServiceDesc for GrantFetchService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var GrantFetchService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dreamserpent.identity.v1.GrantFetchService",
+	HandlerType: (*GrantFetchServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Fetch",
+			Handler:    _GrantFetchService_Fetch_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "dreamserpent/identity/v1/grant_fetch.proto",
+}

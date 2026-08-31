@@ -1,0 +1,9 @@
+{
+  "row": "ech-svcb-suppression",
+  "kind": "ech-clienthello",
+  "domain": "api.allowed.example",
+  "dst_ip": "203.0.113.10",
+  "ech": true,
+  "want": "refuse-ech-clienthello",
+  "why": "ECH can't hide a non-admitted domain behind an admitted IP: a ClientHello carrying an Encrypted Client Hello extension, even on an IP admitted for the outer domain api.allowed.example, is refused at the egress gateway (TLS-1) — an encrypted inner name could be a non-admitted domain, so ECH is refused regardless of the outer-domain admission (doc 06 §3c ECH/SVCB suppression; DNS-4 + TLS-1)"
+}

@@ -1,0 +1,8 @@
+{
+  "row": "interface-match-not-source-ip",
+  "kind": "spoofed-in-vm-source-addr",
+  "dst_ip": "198.51.100.7",
+  "src_spoofed": true,
+  "want": "drop-l3l4-default-deny",
+  "why": "in-VM spoofing: the VM forges its source address aiming at a non-allowlisted destination; NFT-2 matches the attachment interface (iifname), never source IP, so the forge has no effect and NFT-1 default-drop still applies — the forged source does not escape the redirect (doc 06 §3c interface-match; NFT-2)"
+}

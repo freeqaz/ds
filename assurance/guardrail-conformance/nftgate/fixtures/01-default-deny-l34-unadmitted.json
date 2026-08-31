@@ -1,0 +1,7 @@
+{
+  "row": "default-deny-outbound",
+  "kind": "l3l4-direct-connect",
+  "dst_ip": "198.51.100.7",
+  "want": "drop-l3l4-default-deny",
+  "why": "a raw L3/4 connect to a non-allowlisted IP, before any proxy, is dropped by the NFT-1 inet default-drop base chains on agent-VM interfaces (D4, the before-the-proxy leg)"
+}

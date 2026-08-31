@@ -1,0 +1,13 @@
+# check-gofmt-allowlist.txt — pre-existing gofmt-dirty files suppressed by the ratchet.
+#
+# Format: one repo-relative path per line, matching the exact path
+# `gofmt -l` prints (relative to the repo root). Blank lines and #-comments
+# are ignored.
+#
+# NEVER silently widen this list. New entries require an explicit audit of why
+# the file is gofmt-dirty and a plan to sweep it. Add a comment above each entry
+# (or group) explaining the root cause. A file that gets swept simply becomes
+# gofmt-clean and drops out of the dirty set; check-gofmt.sh then reports its
+# stale allowlist entry so it can be pruned (informational, never fatal).
+#
+# (historical: 9 entries seeded at 144981a8 (cigofmt wave) were drained 2026-07 — 4 scripts/taskdb files swept here, 5 assurance entries already swept in-band.)

@@ -1,0 +1,7 @@
+::session attached  model=claude-sonnet-4-6  runtime=2.1.173  perm=default  cwd=/work  tools=[Bash]
+> assistant: READY
+==session success turns=1 dur=3104ms reason=completed
+::session attached  model=claude-sonnet-4-6  runtime=2.1.173  perm=default  cwd=/work  tools=[Bash]
+> assistant: DONE
+==session success turns=1 dur=2987ms reason=completed
+[ session 12ce4a0f8d55 | success | seq 6 ]

@@ -1,0 +1,96 @@
+{
+  "_fixture": "SYNTHETIC — a JSON projection of the doc 13 §3 `baseline_pack` shape for poller tests. NOT the shipped pack (the real pack ships as YAML and is empty at skeleton time by design — see dataplane/artifacts/policy-packs/README.md).",
+  "baseline_pack": {
+    "pack_version": "2026.06.11-v2-synthetic",
+    "machine_source": null,
+    "families": {
+      "core": {"tier": "enabled"},
+      "vcs": {"tier": "enabled"},
+      "packages": {"tier": "enabled"},
+      "telemetry": {"tier": "disabled"}
+    },
+    "entries": [
+      {
+        "fqdn": "api.anthropic.com",
+        "family": "core",
+        "ports": [443],
+        "provenance_source_url": "https://code.claude.com/docs/en/network-config",
+        "machine_source": null,
+        "passthrough": false,
+        "evidence": "vendor-doc"
+      },
+      {
+        "fqdn": "github.com",
+        "family": "vcs",
+        "ports": [443],
+        "provenance_source_url": "https://api.github.com/meta",
+        "machine_source": "api.github.com/meta",
+        "passthrough": false,
+        "evidence": "vendor-machine-source"
+      },
+      {
+        "fqdn": "api.github.com",
+        "family": "vcs",
+        "ports": [443],
+        "provenance_source_url": "https://api.github.com/meta",
+        "machine_source": "api.github.com/meta",
+        "passthrough": false,
+        "evidence": "vendor-machine-source"
+      },
+      {
+        "fqdn": "codeload.github.com",
+        "family": "vcs",
+        "ports": [443],
+        "provenance_source_url": "https://api.github.com/meta",
+        "machine_source": "api.github.com/meta",
+        "passthrough": false,
+        "evidence": "vendor-machine-source"
+      },
+      {
+        "fqdn": "raw.githubusercontent.com",
+        "family": "vcs",
+        "ports": [443],
+        "provenance_source_url": "https://api.github.com/meta",
+        "machine_source": "api.github.com/meta",
+        "passthrough": false,
+        "evidence": "vendor-machine-source"
+      },
+      {
+        "fqdn": "objects.githubusercontent.com",
+        "family": "vcs",
+        "ports": [443],
+        "provenance_source_url": "https://api.github.com/meta",
+        "machine_source": "api.github.com/meta",
+        "passthrough": false,
+        "evidence": "vendor-machine-source"
+      },
+      {
+        "fqdn": "release-assets.githubusercontent.com",
+        "family": "vcs",
+        "ports": [443],
+        "provenance_source_url": "https://api.github.com/meta",
+        "machine_source": "api.github.com/meta",
+        "passthrough": false,
+        "evidence": "vendor-machine-source"
+      },
+      {
+        "fqdn": "github-releases.githubusercontent.com",
+        "family": "vcs",
+        "ports": [443],
+        "provenance_source_url": "https://api.github.com/meta",
+        "machine_source": "api.github.com/meta",
+        "passthrough": false,
+        "evidence": "vendor-machine-source"
+      },
+      {
+        "fqdn": "github-registry-files.githubusercontent.com",
+        "family": "vcs",
+        "ports": [443],
+        "provenance_source_url": "https://api.github.com/meta",
+        "machine_source": "api.github.com/meta",
+        "passthrough": false,
+        "evidence": "vendor-machine-source"
+      }
+    ]
+  }
+}

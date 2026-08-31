@@ -1,0 +1,63 @@
+# ds-mirror-serve.container — read-only serve face for the host-local git mirror.
+#
+# podman QUADLET (config-as-code). NO code we wrote: it runs stock git's
+# `git http-backend` CGI behind a minimal HTTP server, serving the bare mirrors
+# read-only over host-loopback. This is the only listening process in the tree
+# and we did not write it.
+#
+# Serve face is git-http-backend (not `git daemon`) — see images/mirror/README.md
+# for the justification (per-verb read-only enforcement, loopback-bound HTTP,
+# same scheme VMs already use to clone upstream).
+#
+# Install: copy this tree's deploy/ files to /etc/containers/systemd/ (quadlet)
+# + /etc/dream-serpent/mirror/ (env/conf), then `systemctl daemon-reload` and
+# `systemctl enable --now ds-mirror-serve.service`.
+
+[Unit]
+Description=Dream Serpent host-local git mirror (read-only HTTP serve)
+Documentation=https://example.invalid/dream-serpent/images/mirror/README.md
+After=network-online.target
+
+[Container]
+# Stock git image, digest-pinned (tag@sha256, see images/README.md). NOTE:
+# Image=, PublishPort=, and Volume= are quadlet GENERATOR keys — they are NOT
+# expanded from EnvironmentFile, so this literal must be kept in lockstep with
+# DS_MIRROR_IMAGE in ds-mirror.env BYTE-FOR-BYTE by hand (that file is the
+# canonical reference value); lint-env-drift.sh enforces equality.
+Image=docker.io/alpine/git:latest@sha256:4a0e72d49596a1f5d3701aeedafdadc5c0da4062be4657c7bdc4017387f591cc
+ContainerName=ds-mirror-serve
+
+# EnvironmentFile sets the CONTAINER RUNTIME env only (the CGI vars below); it
+# does not feed the generator keys (Image/PublishPort/Volume above). ds-mirror.env
+# is the canonical root/port/addr/image reference; git-http-backend.conf supplies
+# the CGI export config (fetch verbs only, push disabled).
+EnvironmentFile=/etc/dream-serpent/mirror/ds-mirror.env
+EnvironmentFile=/etc/dream-serpent/mirror/git-http-backend.conf
+
+# Mount the host mirror root read-only at GIT_PROJECT_ROOT (=/srv/git, matching
+# git-http-backend.conf). Read-only mount is belt-and-suspenders on top of the
+# push-disabled CGI: the serve container physically cannot mutate the mirror.
+Volume=/var/lib/ds-mirror:/srv/git:ro,Z
+
+# Host-loopback only. 127.0.0.1:8418 -> container :8418 (matches ds-mirror.env).
+# VMs reach this on their host-local gateway address; it never faces the public
+# internet.
+PublishPort=127.0.0.1:8418:8418
+
+# Run the stock git-http-backend CGI behind busybox httpd (both already in the
+# alpine/git image). httpd maps the GIT_HTTP_BACKEND path to git-http-backend
+# as a CGI; only fetch verbs are reachable because GIT_HTTP_RECEIVE_PACK=0.
+# No shell code of ours ships in the image — this is a stock invocation.
+Exec=sh -c 'printf "G:/git-http-backend\n" >/tmp/httpd.conf; exec busybox httpd -f -vv -p 0.0.0.0:8418 -c /tmp/httpd.conf -h /usr/libexec/git-core'
+
+# Run unprivileged.
+User=git
+Group=git
+NoNewPrivileges=true
+
+[Service]
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target default.target

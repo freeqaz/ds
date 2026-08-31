@@ -1,0 +1,342 @@
+// LOG-1 event schema — the boundary's shared telemetry contract.
+//
+// Package home: dreamserpent.boundary.v1 (doc 14 §2; doc 09 §8 Stage 0). This
+// file authors the SEVEN frozen LOG-1 wire messages of the doc 14 §2 checklist —
+// the six wire messages plus SpoolOverflow:
+//
+//   FlowRecord, DnsEvent, HttpEvent, PolicyDecision, CredentialUseEvent,
+//   SessionRef, SpoolOverflow.
+//
+// A message or field missed at the one-shot Stage-0 freeze is a v2-package event,
+// not a patch (doc 14 §1/§2 change control; proto/FREEZE.md). Every checklist row
+// of doc 14 §2 is implemented here and doc-commented with its governing decision.
+//
+// Address discipline (doc 14 §2, D75): every address-bearing field is
+// family-agnostic — `bytes addr` + an `AddressFamily` enum — NEVER fixed32/u32.
+// Retrofitting 128-bit addresses post-freeze is a breaking v2; freezing the
+// family-agnostic shape now is time-locked. The full-v6 round-trip test is
+// per-commit (D75) — see the package README / freeze-PR obligations.
+//
+// Sibling units own policy_stream / ask-user / suspend in this same package
+// (doc 14 §2b); this file owns ONLY the LOG-1 messages and must not collide with
+// those message names.
+
+syntax = "proto3";
+
+package dreamserpent.boundary.v1;
+
+import "dreamserpent/boundary/v1/session_ref.proto";
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/boundary/v1;boundaryv1";
+
+// AddressFamily tags every family-agnostic `bytes addr` field in this package
+// (doc 14 §2, D75): 4 bytes for IPV4, 16 for IPV6. fixed32/u32 is forbidden —
+// it cannot carry a v6 literal, and widening it post-freeze is a breaking v2.
+enum AddressFamily {
+  ADDRESS_FAMILY_UNSPECIFIED = 0;
+  ADDRESS_FAMILY_IPV4 = 1;
+  ADDRESS_FAMILY_IPV6 = 2;
+}
+
+// SessionRef — the SHARED session join quartet (D66/D44) — moved to its own
+// file at the freeze-PR session-ref unification: see session_ref.proto (same
+// package, same message, wire-identical). It is imported above; the sibling
+// doc 14 §2b seams and the identity.v1 package import that file too, never
+// redeclaring the message.
+
+// Provenance — POL-3 verdict provenance (doc 14 §2, doc 13 §5).
+//
+// MANDATORY on DnsEvent and PolicyDecision: a verdict with missing provenance
+// FAILS CI (doc 14 §2 DnsEvent provenance row; "missing provenance fails CI").
+// The same provenance struct is shared by DnsEvent and PolicyDecision so LOG-4's
+// version-chain assertion reads one shape. `policy_version` is the policy-log
+// version namespace; it is distinct from PolicyDecision's `digest_set_version`,
+// which is a SEPARATE non-policy namespace (D73 — see PolicyDecision).
+message Provenance {
+  string rule_id = 1;
+  string policy_layer = 2;
+  uint64 policy_version = 3;
+}
+
+// AdmissionType — DNS-2b admission classification echoed onto DnsEvent.
+//
+// Values frozen with the §3 DNS-2b API (doc 14 §3, D75): NORMAL, SYNTHETIC (the
+// Phase-B synthetic-A admission — guest sees a synthetic v4 literal, the map
+// carries the real v6 targets), SINKHOLE_RESERVED (reserves the slot for any
+// future D71 sinkhole class). Echoing the enum on DnsEvent lets Phase-B LOG-4
+// reconciliation tag synthetic-A flows without a synchronous DNS-2b map read.
+enum AdmissionType {
+  ADMISSION_TYPE_UNSPECIFIED = 0;
+  ADMISSION_TYPE_NORMAL = 1;
+  ADMISSION_TYPE_SYNTHETIC = 2;
+  ADMISSION_TYPE_SINKHOLE_RESERVED = 3;
+}
+
+// MarkLeg — the decoded leg/type nibble of a DS composite ct-mark (D76).
+//
+// Mirrors the bits 27-24 leg nibble of the §5 mark layout (doc 14 §5, D76):
+// 0x1 agent-VM leg, 0x2 ds-tlsproxy upstream, 0x3 ds-dnsgate upstream
+// resolution, 0x4 infrastructure egress, 0xF reserved/diagnostic. The 32-bit
+// mark constants + DS_MARK_MASK themselves live in ds-contracts (doc 14 §6), NOT
+// here; this enum is only the decoded view stamped onto FlowRecord.
+enum MarkLeg {
+  MARK_LEG_UNSPECIFIED = 0;
+  MARK_LEG_AGENT_VM = 1;
+  MARK_LEG_TLSPROXY_UPSTREAM = 2;
+  MARK_LEG_DNSGATE_UPSTREAM = 3;
+  MARK_LEG_INFRA_EGRESS = 4;
+  MARK_LEG_RESERVED_DIAGNOSTIC = 15;
+}
+
+// RejectReason — why a flow/connection was rejected (doc 14 §2, D70).
+//
+// Distinguishes QUIC_BLOCKED (udp/443 rejected with ICMP port-unreachable, never
+// silently dropped, counted per session — the D70 flip-to-inspect trigger reads
+// this off-box) from DEFAULT_DENY (generic default-deny) and from
+// RECOVERY_FAILED (the recovery-failure refusal class below).
+//
+// FOLLOW-UP (freeze PR): ds-contracts also carries a RejectReason/SessionRef Rust
+// definition (doc 14 §6 — the `ds-contracts` crate-home row); the two are unified
+// at the one-shot freeze PR.
+enum RejectReason {
+  REJECT_REASON_UNSPECIFIED = 0;
+  // Generic NFT default-deny drop.
+  REJECT_REASON_DEFAULT_DENY = 1;
+  // udp/443 rejected (icmp port-unreachable) + counted per session (D70) —
+  // queryable off-box so the flip-to-inspect trigger fires; NEVER folded into
+  // the generic default-deny bucket.
+  REJECT_REASON_QUIC_BLOCKED = 2;
+  // Recovery-failure refusal: original-destination recovery failed -> connection
+  // refused, attributed to session (D69 — recovery-failure refusals as a named
+  // event class; the seam the D70 QUIC carveout preserves).
+  REJECT_REASON_RECOVERY_FAILED = 3;
+}
+
+// ConsentClass — the D60 per-repo content-consent class.
+//
+// RESERVATION ONLY (doc 14 §2 HttpEvent row; round-4 packet ratified
+// 2026-06-12). Mirrors the D60 per-repo consent classes (metadata / session /
+// workload) and the identity.v1 precedent (doc 16 §9 / identity/v1 README's D60
+// consent-class flag on approval events). The enum is declared so HttpEvent can
+// reserve a field of its type at zero migration cost; NO population behavior is
+// frozen (the field is reserved, not wired) — the election rides the existing
+// policy snapshot (D60 / doc 15 §9), so no message-set change is implied. A
+// missed reservation would be a v2-package event (the freeze is one-shot).
+enum ConsentClass {
+  CONSENT_CLASS_UNSPECIFIED = 0;
+  CONSENT_CLASS_METADATA = 1;
+  CONSENT_CLASS_SESSION = 2;
+  CONSENT_CLASS_WORKLOAD = 3;
+}
+
+// FlowRecord — a connection/flow telemetry record (doc 14 §2).
+//
+// Addresses are family-agnostic everywhere (D75): `src_addr`/`dst_addr` are
+// `bytes` paired with `address_family`, NEVER fixed32.
+//
+// Composite ct-mark decode, NOT a bare index (D76): the raw `ct_mark` is carried
+// alongside its decoded `leg` (from the leg nibble) and `mark_session_index`.
+// `mark_session_index` = host session index MOD 2^14 — a 14-bit DISAMBIGUATOR,
+// NEVER the primary join key (the SessionRef `tap_name` / orchestrator session
+// record is the join key, doc 14 §4). Index-wrap semantics are part of this
+// field's documented contract: a monitored wrap/exhaustion alarm ships with
+// NFT-5 (doc 14 §4); two live sessions can share a `mark_session_index`, so a
+// join MUST go through SessionRef, never through this field.
+message FlowRecord {
+  SessionRef session = 1;
+
+  AddressFamily address_family = 2;
+  bytes src_addr = 3;
+  bytes dst_addr = 4;
+  uint32 src_port = 5;
+  uint32 dst_port = 6;
+  // L4 protocol number (e.g. 6 TCP, 17 UDP) — family-agnostic, never a fixed32
+  // address packing.
+  uint32 ip_protocol = 7;
+
+  // Composite ct-mark decode (D76): raw mark + decoded leg + 14-bit
+  // disambiguator. mark_session_index = host session index mod 2^14.
+  uint32 ct_mark = 8;
+  MarkLeg leg = 9;
+  uint32 mark_session_index = 10;
+
+  // Set when the flow was rejected; otherwise REJECT_REASON_UNSPECIFIED. The
+  // QUIC_BLOCKED reject (icmp port-unreachable, never silently dropped) is
+  // counted per session and queryable off-box (D70).
+  RejectReason reject_reason = 11;
+
+  // Final destroy accounting (NFT-6 teardown emits byte counts into ds-flowlog).
+  uint64 bytes_tx = 12;
+  uint64 bytes_rx = 13;
+
+  int64 timestamp_unix_nanos = 14;
+}
+
+// DnsEvent — a DNS query/answer telemetry record (doc 14 §2).
+//
+// Session attribution derives ONLY from interface-anchored signals, never raw
+// source IP (D69/D44): this message carries the SessionRef resolved from the
+// interface-anchored signal under NFT-2's frozen three-keys-agree clause, never
+// a src-IP-keyed lookup.
+//
+// POL-3 provenance is MANDATORY (doc 14 §2): an event with missing provenance
+// fails CI.
+message DnsEvent {
+  SessionRef session = 1;
+
+  string query_fqdn = 2;
+  // DNS query type (e.g. 1 A, 28 AAAA, 65 HTTPS/SVCB).
+  uint32 query_type = 3;
+
+  // Admitted answer addresses, family-agnostic (D75): each entry is `bytes` +
+  // its family. NEVER fixed32.
+  AddressFamily answer_family = 4;
+  repeated bytes answer_addrs = 5;
+
+  // D75 IPv6 trigger metrics. aaaa_only: upstream had AAAA but zero A after the
+  // CNAME chase (the T3 IPv6 trigger metric — a standing dashboard query joins
+  // it to failed connects; unmeasurable if missed). aaaa_stripped: soft signal
+  // that an AAAA answer was suppressed.
+  bool aaaa_only = 6;
+  bool aaaa_stripped = 7;
+
+  // admission_type echo (D75) — reconciles doc 11 §5.5 with the §2 checklist.
+  // Lets Phase-B LOG-4 reconciliation tag synthetic-A flows without a
+  // synchronous DNS-2b map read. Values frozen with the §3 DNS-2b API.
+  AdmissionType admission_type = 8;
+
+  // POL-3 provenance — MANDATORY; missing provenance fails CI (doc 14 §2). Same
+  // provenance struct as PolicyDecision.
+  Provenance provenance = 9;
+
+  // aimed_resolver (D69, resolved 2026-06-11): the original dst of a redirected
+  // udp/53 query, typed as an addr:port pair (netip.AddrPort-shaped),
+  // family-agnostic. RESERVED OPTIONAL field — reserving costs one optional
+  // proto field at zero migration cost and keeps the frozen NFT-5 bypass counter
+  // joinable to which resolver was aimed at. The recover-vs-zero population
+  // decision (conntrack lookup / IP_RECVORIGDSTADDR-class vs always-zero) gates
+  // ONLY ds-dnsgate population behavior and gets its own decision-log entry when
+  // made — no population behavior is frozen here.
+  AddressFamily aimed_resolver_family = 10;
+  bytes aimed_resolver_addr = 11;
+  uint32 aimed_resolver_port = 12;
+
+  int64 timestamp_unix_nanos = 13;
+}
+
+// HttpEvent — HTTP metadata telemetry (doc 14 §2).
+//
+// METADATA ONLY: this message stamps the policy version per POL-3 (doc 13 §5) and
+// carries no request/response bodies. HttpEvent is the one LOG-1 message whose
+// metadata sits at the content/non-content line at the TLS-terminating egress
+// gateway (doc 08 §3 introspection-by-consent).
+//
+// The `consent_class` field is the D60 consent-class tag — RESERVED ONLY (doc 14
+// §2 HttpEvent row): an optional `metadata | session | workload`
+// field declared but with NO population behavior frozen (the field is reserved,
+// not wired). Mirrors the identity.v1 precedent (doc 16 §9). Reserving costs one
+// optional field at zero migration cost; a missed reservation is a v2-package
+// event. Population (which class an emitted event carries) gets its own
+// decision-log entry when content telemetry is wired, never before.
+message HttpEvent {
+  SessionRef session = 1;
+
+  string method = 2;
+  string host = 3;
+  string path = 4;
+  uint32 status_code = 5;
+
+  // Stamps the policy version per POL-3 (doc 13 §5) — metadata, not content.
+  Provenance provenance = 6;
+
+  // D60 consent-class tag — RESERVED ONLY, no population behavior frozen (doc 14
+  // §2 HttpEvent row). The election rides the existing policy snapshot (D60 / doc 15 §9),
+  // so no .proto body change beyond this reservation is implied.
+  ConsentClass consent_class = 7;
+
+  int64 timestamp_unix_nanos = 8;
+}
+
+// PolicyDecision — a recorded policy verdict (doc 14 §2).
+//
+// Plane KEYED | GENERIC + digest-set version in verdict provenance (D73). The
+// `digest_set_version` is a SEPARATE, non-policy version namespace from
+// Provenance.policy_version (§7) — recorded so LOG-4's version-chain assertion
+// does not treat it as policy_log skew.
+//
+// Fingerprint-only convention (D73): a matched secret value appears in NO log,
+// event, spool, or error path — fingerprint only (the CredentialUseEvent
+// convention). This is a (c)-suite assertion, not a code-review hope: no field on
+// this message ever carries a plaintext secret.
+message PolicyDecision {
+  SessionRef session = 1;
+
+  // POL-3 provenance — MANDATORY (doc 14 §2): rule id, layer, policy version.
+  Provenance provenance = 2;
+
+  // Verdict plane (D73): KEYED (the identity-fed exact-match plane) vs GENERIC
+  // (the pattern-rule plane).
+  VerdictPlane plane = 3;
+
+  // Digest-set version — a SEPARATE non-policy namespace (D73/§7). NOT the same
+  // namespace as Provenance.policy_version.
+  uint64 digest_set_version = 4;
+
+  // The verdict itself. Fingerprint-only: when a secret matched, only its
+  // fingerprint is carried — never the secret value (D73).
+  string verdict = 5;
+  string match_fingerprint = 6;
+
+  int64 timestamp_unix_nanos = 7;
+}
+
+// VerdictPlane — the policy plane that produced a PolicyDecision (D73).
+//
+// KEYED is the identity-fed exact-match digest plane; GENERIC is the
+// pattern-rule plane (schema-capped at block+log, fail-open only as an explicit
+// bit). The digest-set version carried alongside KEYED verdicts is a separate
+// non-policy namespace (D73/§7).
+enum VerdictPlane {
+  VERDICT_PLANE_UNSPECIFIED = 0;
+  VERDICT_PLANE_KEYED = 1;
+  VERDICT_PLANE_GENERIC = 2;
+}
+
+// CredentialUseEvent — a credential-use telemetry record (doc 14 §2).
+//
+// FINGERPRINT-ONLY (D8/D73): carries the session, the service the credential was
+// presented to, and the credential FINGERPRINT — NEVER the credential itself. A
+// matched/used secret value appears in no log, event, spool, or error path; this
+// message structurally cannot carry one (there is no plaintext field). This is
+// the convention PolicyDecision's fingerprint-only row cites.
+message CredentialUseEvent {
+  SessionRef session = 1;
+
+  // The service the credential was presented to (e.g. a service_id / host).
+  string service = 2;
+
+  // The credential fingerprint — NEVER the credential (D8/D73). HMAC-digest /
+  // truncated-fingerprint shaped; the never-log-the-secret invariant is enforced
+  // at the ds-telemetry chokepoint (doc 14 §6), and this message carries no
+  // field that could hold plaintext.
+  string credential_fingerprint = 3;
+
+  int64 timestamp_unix_nanos = 4;
+}
+
+// SpoolOverflow — the visible-loss marker (doc 14 §2).
+//
+// When the LOG-3 disk-bounded spool overflows, loss is VISIBLE, never silent: the
+// marker ships in the surviving stream so the receipt of loss is always present.
+// The spool's back-pressure / drop policy drops payload events but NEVER this
+// marker (doc 14 §12.4).
+//
+// Ratified D116 (round-4 packet §6, 2026-06-12): the harness-frozen
+// visible-loss marker joins the Stage-0 LOG-1 wire set, authorizing the
+// doc 14 §2 SpoolOverflow checklist row. Source: the boundary harness
+// flowlog fix 9 adjudication + the flowlog_schema_test.go frozen shape.
+message SpoolOverflow {
+  SessionRef session = 1;
+  uint64 dropped_count = 2;
+  int64 timestamp_unix_nanos = 3;
+}

@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthetic VIOLATION (undecidable destination): a presentation whose issued_service_id is blank — the digest names no intended service, so there is no destination fence to diff the egress against and the wrong-vs-intended verdict is undecidable. The check must FAIL with inject-class-issued-digest-destination-undecidable, treating the missing fence as a breach, never a silent pass (kin to the credttl undecidable-TTL verdict).",
+  "presentations": [
+    { "name": "digest-names-no-issued-service", "issued_service_id": "", "egress_destination": "github", "blocked": false }
+  ]
+}

@@ -1,0 +1,224 @@
+// ds-canvas board API — the gRPC half of the canvas's owned interfaces
+// (doc 17 §10). D87 posture is CONTRACTS-NOW, BUILD-AT-M2: this STUB freezes in
+// the M0 window so neighbors can name and fake the canvas, while the service
+// itself (paid/canvas/) builds nothing until the plan store exists to project
+// from (doc 17 §5). [OSS] — the contract is public per D58 even though the
+// implementing service is paid (D80: paid services implement public protos).
+//
+// Co-freezes ALONGSIDE attach.v1 per the doc 15 §6.1 ds-canvas-stub rider
+// (CHECK 5a of scripts/check-freeze-riders.sh: this row may not stay OPEN once
+// attach.v1 is FROZEN — neighbors must be able to fake the canvas from the same
+// wave).
+//
+// STRUCTURAL INVARIANT (frozen now, D78/D61 — doc 17 §7): NO message in this
+// package may carry session input. ds-canvas links only the WatchSession read
+// leg (D79) and holds no client of the writer seam; class-1 interactions
+// (injecting into an attach stream, tailing terminals, any parallel session-read
+// channel) are STRUCTURALLY IMPOSSIBLE, not policy-forbidden. Class-2
+// control-plane actions reachable from a board (launch-from-plan-card,
+// driver-handoff request) are server-arbitrated RPCs on EXISTING control-plane
+// surfaces (doc 17 §7) — they ride orchestrator.v1, NOT this package. Canvas
+// presence never feeds the D78 attendedness signal (doc 17 §6).
+//
+// A message or field missed at this one-shot stub freeze is a v2-package event
+// (doc 17 §5). v1 proper lands at M2 build start (D87).
+
+syntax = "proto3";
+
+package dreamserpent.canvas.v1;
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/canvas/v1;canvasv1";
+
+// =============================================================================
+// Board CRUD (doc 17 §10).
+// =============================================================================
+
+// Board is a canvas board: an arrangement surface. `name`/`description` are
+// product metadata; `org_id` scopes it to the org RBAC (no parallel ACL system,
+// D61 / doc 17 §8). Arrangement is canvas-truth; projected content is
+// platform-truth (read-only, doc 17 §5).
+message Board {
+  string board_id = 1;
+  string org_id = 2;                   // org-RBAC scope — rides org RBAC, never a parallel ACL
+  string name = 3;
+  string description = 4;
+  uint64 created_at = 5;               // unix seconds
+  uint64 updated_at = 6;               // unix seconds
+}
+
+// Each RPC takes a dedicated <Method>Request and returns a dedicated
+// <Method>Response (the boundary.v1/identity.v1 house pattern + buf STANDARD
+// RPC_REQUEST_RESPONSE_UNIQUE) so a later field add never forces a v2 on a
+// shared message. The single-entity responses wrap a `board`/`pin`/`grant` so
+// they can grow.
+message CreateBoardRequest {
+  string org_id = 1;
+  string name = 2;
+  string description = 3;
+}
+message CreateBoardResponse { Board board = 1; }
+message GetBoardRequest { string board_id = 1; }
+message GetBoardResponse { Board board = 1; }
+message UpdateBoardRequest {
+  string board_id = 1;
+  string name = 2;
+  string description = 3;
+}
+message UpdateBoardResponse { Board board = 1; }
+message DeleteBoardRequest { string board_id = 1; }
+message DeleteBoardResponse {}
+message ListBoardsRequest {
+  string org_id = 1;
+  uint32 page_size = 2;
+  string page_token = 3;
+}
+message ListBoardsResponse {
+  repeated Board boards = 1;
+  string next_page_token = 2;
+}
+
+// =============================================================================
+// Role grants / sharing (doc 17 §10) — RIDES ORG RBAC, no parallel ACL system
+// (D61, doc 17 §8). A grant binds a principal to a board role; the platform's
+// org RBAC is the authority, this is the board-scoped projection of it.
+// =============================================================================
+
+// BoardRole is the board-scoped role. VIEWER is read-only (the canvas is never a
+// second writer, D86); EDITOR may rearrange tiles (arrangement is canvas-truth,
+// NOT a write into any projected session — the structural invariant holds);
+// OWNER may also grant/revoke and delete.
+enum BoardRole {
+  BOARD_ROLE_UNSPECIFIED = 0;
+  BOARD_ROLE_VIEWER = 1;
+  BOARD_ROLE_EDITOR = 2;               // arranges tiles; NEVER writes into a projected session
+  BOARD_ROLE_OWNER = 3;
+}
+
+message BoardGrant {
+  string board_id = 1;
+  string principal_id = 2;             // org-RBAC principal — never a board-local identity
+  BoardRole role = 3;
+}
+message GrantBoardRoleRequest {
+  string board_id = 1;
+  string principal_id = 2;
+  BoardRole role = 3;
+}
+message GrantBoardRoleResponse { BoardGrant grant = 1; }
+message RevokeBoardRoleRequest {
+  string board_id = 1;
+  string principal_id = 2;
+}
+message RevokeBoardRoleResponse {}
+message ListBoardGrantsRequest { string board_id = 1; }
+message ListBoardGrantsResponse { repeated BoardGrant grants = 1; }
+
+// =============================================================================
+// Projection-pin management (doc 17 §3.1) — pinning READ-ONLY platform
+// projections (session tiles, fleet-tree nodes, plan cards) onto boards. The pin
+// is an arrangement record (position + which projection); it carries NO session
+// input and NO projected payload — the payload is fetched read-only over the
+// platform's own read legs (WatchSession for session tiles, D79). Pinning a
+// projection can NEVER become a write channel into it (the structural invariant).
+// =============================================================================
+
+// ProjectionKind is what a pin points at. SESSION_TILE projects a session's
+// read-only WatchSession view (D79 read leg only); FLEET_TREE_NODE a fleet-
+// directory node; PLAN_CARD a read-only plan board card (doc 17 §3.1). None is a
+// writer seam.
+enum ProjectionKind {
+  PROJECTION_KIND_UNSPECIFIED = 0;
+  PROJECTION_KIND_SESSION_TILE = 1;    // read-only WatchSession view — NOT an input channel
+  PROJECTION_KIND_FLEET_TREE_NODE = 2;
+  PROJECTION_KIND_PLAN_CARD = 3;
+}
+
+// PinPosition is canvas-truth arrangement (doc 17 §5). The platform owns the
+// projected content; the board owns only where it sits.
+message PinPosition {
+  double x = 1;
+  double y = 2;
+  double width = 3;
+  double height = 4;
+}
+
+// ProjectionPin is the arrangement record: a board pins a read-only projection
+// at a position. `target_ref` is the opaque platform reference to the projected
+// thing (e.g. a session_uuid for SESSION_TILE) — a key the consumer resolves
+// over the platform's read leg, never an input sink.
+message ProjectionPin {
+  string pin_id = 1;
+  string board_id = 2;
+  ProjectionKind kind = 3;
+  string target_ref = 4;               // opaque read-only platform reference (e.g. session_uuid)
+  PinPosition position = 5;
+}
+
+message AddProjectionPinRequest {
+  string board_id = 1;
+  ProjectionKind kind = 2;
+  string target_ref = 3;
+  PinPosition position = 4;
+}
+message AddProjectionPinResponse { ProjectionPin pin = 1; }
+message UpdateProjectionPinRequest {
+  string pin_id = 1;
+  PinPosition position = 2;            // re-arrange only — never the projected content
+}
+message UpdateProjectionPinResponse { ProjectionPin pin = 1; }
+message RemoveProjectionPinRequest { string pin_id = 1; }
+message RemoveProjectionPinResponse {}
+message ListProjectionPinsRequest { string board_id = 1; }
+message ListProjectionPinsResponse { repeated ProjectionPin pins = 1; }
+
+// =============================================================================
+// Board history listing (doc 17 §9) — a PRODUCT feature, explicitly NOT the
+// doc 04 §5 audit chain. Lists arrangement-level changes for the board's own UX,
+// never a security/audit surface.
+// =============================================================================
+
+message BoardHistoryEntry {
+  string entry_id = 1;
+  string board_id = 2;
+  string actor_principal_id = 3;       // org-RBAC principal who made the change
+  string summary = 4;                  // human-readable arrangement change (product UX)
+  uint64 at = 5;                       // unix seconds
+}
+message ListBoardHistoryRequest {
+  string board_id = 1;
+  uint32 page_size = 2;
+  string page_token = 3;
+}
+message ListBoardHistoryResponse {
+  repeated BoardHistoryEntry entries = 1;
+  string next_page_token = 2;
+}
+
+// =============================================================================
+// BoardService — the doc 17 §10 stub surface. EVERY RPC is board arrangement,
+// grants/sharing, projection pinning, or history. NONE carries session input
+// (the structural invariant — class-1 is structurally impossible here); class-2
+// control-plane actions ride orchestrator.v1, not this service.
+// =============================================================================
+service BoardService {
+  // Board CRUD
+  rpc CreateBoard(CreateBoardRequest) returns (CreateBoardResponse);
+  rpc GetBoard(GetBoardRequest) returns (GetBoardResponse);
+  rpc UpdateBoard(UpdateBoardRequest) returns (UpdateBoardResponse);
+  rpc DeleteBoard(DeleteBoardRequest) returns (DeleteBoardResponse);
+  rpc ListBoards(ListBoardsRequest) returns (ListBoardsResponse);
+
+  // Role grants / sharing — rides org RBAC (D61, no parallel ACL)
+  rpc GrantBoardRole(GrantBoardRoleRequest) returns (GrantBoardRoleResponse);
+  rpc RevokeBoardRole(RevokeBoardRoleRequest) returns (RevokeBoardRoleResponse);
+  rpc ListBoardGrants(ListBoardGrantsRequest) returns (ListBoardGrantsResponse);
+
+  // Projection-pin management — read-only projections only (doc 17 §3.1)
+  rpc AddProjectionPin(AddProjectionPinRequest) returns (AddProjectionPinResponse);
+  rpc UpdateProjectionPin(UpdateProjectionPinRequest) returns (UpdateProjectionPinResponse);
+  rpc RemoveProjectionPin(RemoveProjectionPinRequest) returns (RemoveProjectionPinResponse);
+  rpc ListProjectionPins(ListProjectionPinsRequest) returns (ListProjectionPinsResponse);
+
+  // Board history listing — product feature, NOT the audit chain (doc 17 §9)
+  rpc ListBoardHistory(ListBoardHistoryRequest) returns (ListBoardHistoryResponse);
+}

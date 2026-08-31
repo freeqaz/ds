@@ -1,0 +1,5 @@
++,"/home/ds/work/agent notes.md"
++,"/home/ds/work/build/out file.bin",100644,4096
+=,"/home/ds/.config/My App/settings.json",100644,512
+=,"/home/ds/work/weird "" quote.txt"
+-,"/home/ds/work/scratch dir/tmp file"

@@ -1,0 +1,133 @@
+#!/usr/sbin/nft -f
+#
+# NFT-5 — Per-session ct-mark flow-tag stamping (Netflow accounting).
+# artifact-version: 1
+# governing: doc 09 §3 (NFT-5) · doc 03 §4 · doc 14 §4/§5/§11 · D43 D66 D68 D70 D76
+#
+# WHAT THIS IS
+#   The versioned, declarative NFT-5 accounting layer, installed by a systemd unit
+#   AFTER the NFT-1 floor. Its ONE `inet` table `ds_flowtag` tags every agent-VM
+#   flow with the D76 composite `ct mark` derived from the session, so conntrack
+#   accounting records and nflog drop events carry the session and `ds-flowlog`
+#   can attribute every byte a VM sent back to the session that caused it (doc 09
+#   §3/§7, D43). Like NFT-4's closure table, it is a SEPARATE table so the
+#   accounting layer is independently installable and reversible with a single
+#   `nft delete table inet ds_flowtag`, and it NEVER edits the NFT-1 floor's frozen
+#   default-deny scope (the floor stays mark-free by design — its own MARKS header
+#   and the `check-nft-mark-constants` land gate enforce that; marks arrive HERE
+#   with NFT-5, sourced only from ds-contracts).
+#
+#   This is a BUILD ARTIFACT, never hand-applied state (doc 09 §3). It ships the
+#   TABLE SKELETON — the base chain + the empty per-session verdict map — and the
+#   documented per-session stamp-chain shape. The per-session STATE (the stamp
+#   chains + the map elements keyed on each `dstap-<idx>` tap) is RUNTIME, written
+#   by `ds-nft` (`flowtag::NftWriter::stamp_session`) on session create and removed
+#   on destroy — exactly as the NFT-3 per-session allow-sets and the NFT-3b
+#   per-session verdict chains are runtime state layered on their table skeletons.
+#
+# MARK DISCIPLINE (D76, doc 14 §5 — the Tailscale PR-5606 lesson)
+#   The per-session `ct mark` WRITE is the masked read-modify-write
+#       ct mark set ct mark & ~DS_MARK_MASK | <composed>
+#   where `<composed>` = ds_contracts::mark::compose(Leg::AgentVm, host_session_index)
+#   (magic 0xD + leg nibble 0x1 + 14-bit session index) and the masks are the
+#   frozen DS_MARK_MASK / its complement. It overwrites ONLY the DS-owned bits and
+#   preserves any foreign fwmark bits coexisting in the permanently-unclaimed gap
+#   (bits 14–23, never set, never matched). NO mark VALUE and NO complement-mask
+#   literal is ever authored inline in this artifact — the composed value is
+#   RUNTIME map/chain state from `ds-contracts` (the stamp-chain body below is a
+#   COMMENTED template, so no mark literal appears in any effective line). The CI
+#   mark lint (ds-contracts ds-nft-mark-lint, scripts/lint-nft-artifacts.sh)
+#   enforces this over the whole artifacts/nft dir.
+#
+# INTERFACE MATCHING (D66, doc 03 §3)
+#   The stamp keys on the never-recycled per-session tap `dstap-<idx>` (≤15 chars)
+#   — the unforgeable attachment point — NEVER source IP: a forged `ip saddr` still
+#   arrives on its real tap, so the stamp catches it regardless (doc 06 (c)
+#   in-VM-spoofing invariant). The `ct mark` is the interface-anchored attribution
+#   key (doc 12 §2.1 invariant 2); the tap name / orchestrator session record stays
+#   the AUTHORITATIVE join key, the 14-bit index a disambiguator (doc 14 §4).
+#
+# COMPOSITION ORDER (doc 14 §5; ds-contracts nft_composition_lint)
+#   The `flowtag_forward` base chain is authored at `priority mangle` (-150),
+#   strictly EARLIER than NFT-1's `priority filter` (0) forward chain that owns the
+#   terminal `ct state new drop`. So a NEW flow's conntrack entry is stamped BEFORE
+#   the floor decides its verdict — and a packet the floor then drops still carries
+#   the session on its nflog drop event. The stamp chain issues NO verdict (it sets
+#   the mark, counts, and returns), so the floor keeps its drop authority: this is
+#   an ACCOUNTING layer, never a policy layer.
+#
+# CONNTRACK ACCOUNTING (host baseline, doc 14 §11)
+#   The byte/packet/duration fields the flow records carry come from the versioned
+#   host baseline (../host-baseline/host-baseline.v0.json): nf_conntrack_acct=1 and
+#   nf_conntrack_timestamp=1, applied by the bootstrap unit BEFORE this ruleset
+#   loads. NFT-5 CONSUMES that baseline by reference; it sets no sysctl. Without
+#   accounting the conntrack events still emit, only without byte/packet totals —
+#   the mapping (ds-telemetry `flow`) degrades those fields to 0, never refuses.
+#
+# NFLOG DROP EVENTS (doc 09 §7)
+#   The VM-forward-leg drop events `ds-flowlog` consumes are emitted by the NFT-1
+#   floor's terminal drop, adopting the canonical NFT-5 drop-observe shape
+#   (ds-nft `flowtag::floor_drop_observe_rule`):
+#       iifname "dstap-*" ct state new counter log prefix "ds-nft5-drop " group 5 drop
+#   Because THIS table stamped the `ct mark` at an earlier priority, that nflog line
+#   carries the session (the ds-telemetry `flow::parse_nflog_drop_line` mapping keys
+#   on the `ds-nft5-drop` prefix + the `MARK=` field). The live floor adoption is
+#   the NFT-6/Stage-1 integration step, tracked as an env-gated deferred-manual arm
+#   (D50); the shape + the userspace mapping are frozen here.
+
+# Idempotent install: drop and recreate ONLY our own table. We never touch
+# ds_boundary (NFT-1), ds_resolver_closure (NFT-4), ds_proxy_out (NFT-3b), or any
+# other table in the netns (ops-access WireGuard, systemd-networkd — doc 14 §5).
+table inet ds_flowtag
+delete table inet ds_flowtag
+
+table inet ds_flowtag {
+
+	# ---- Per-session tap → stamp-chain verdict map (NFT-5 runtime state) -------
+	# Keyed on the per-session tap interface name; the value is a `jump` to that
+	# session's `tag_<idx>` stamp chain. `ds-nft` adds an element
+	#   { "dstap-<idx>" : jump tag_<idx> }
+	# on session create and removes it on destroy, in the same atomic batch as the
+	# stamp chain (flowtag::stamp_batch / unstamp_batch). Ships EMPTY: a freshly
+	# bootstrapped host has no sessions. Keyed on the unforgeable ifname, never a
+	# source IP.
+	map session_tag {
+		type ifname : verdict
+	}
+
+	# ---- The flow-tag stamping chain ------------------------------------------
+	# A base chain on the forward hook at `priority mangle` (-150) — EARLIER than
+	# NFT-1's filter (0) forward chain, so the stamp lands on a NEW flow's conntrack
+	# entry before the floor's terminal drop runs. Default `accept` policy is
+	# NON-terminal across base chains: after this chain the packet still traverses
+	# NFT-1's filter chain, which keeps its drop authority. We only ever dispatch to
+	# a per-session stamp chain here; this table imposes NO verdict on any flow.
+	chain flowtag_forward {
+		type filter hook forward priority mangle; policy accept;
+
+		# Dispatch a per-session tap's flows to its stamp chain. A tap with no live
+		# session (no map element) simply falls through — unmarked best-effort, never
+		# a refusal (mark-only-adds, doc 14 §5). Matched on the ifname, never saddr.
+		meta iifname vmap @session_tag
+	}
+
+	# ---- Per-session STAMP chain TEMPLATE (NFT-5 runtime state) ----------------
+	# DOCUMENTED SHAPE ONLY — not instantiated in this artifact (a freshly
+	# bootstrapped host has no sessions). On session create `ds-nft` adds a regular
+	# chain `tag_<idx>` with the body below and the `@session_tag` element keying
+	# that session's `dstap-<idx>` tap to `jump tag_<idx>`; on destroy it removes
+	# both (flowtag::stamp_batch / unstamp_batch). The `<composed>` value is
+	# ds_contracts::mark::compose(Leg::AgentVm, <idx>) — never authored inline here,
+	# so no mark VALUE literal appears in any effective line of this file:
+	#
+	#   chain tag_<idx> {
+	#       # masked read-modify-write: set the DS bits, preserve foreign fwmark
+	#       # bits in the unclaimed gap; then count. No verdict — return to the
+	#       # base chain so the floor keeps drop authority.
+	#       ct mark set ct mark & ~DS_MARK_MASK | <composed> counter
+	#   }
+	#
+	# A stamped flow's conntrack entry carries the composite mark for its whole
+	# lifetime, so conntrack accounting (NEW/DESTROY, bytes, packets, duration) and
+	# the floor's nflog drop event both attribute to the correct session in LOG-2.
+}

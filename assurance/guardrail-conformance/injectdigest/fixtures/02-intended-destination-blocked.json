@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthetic VIOLATION (intended destination blocked): an ISSUED{github} digest presented to its OWN intended service (github) that WAS blocked — the injected credential must fire exactly once and pass on the intended egress (the swap/scan filter-ordering interlock, doc 16 §10 / §5.5 step 7), so a block here breaks the swap. The check must FAIL with inject-class-issued-digest-intended-destination-blocked — the independent complement of the wrong-destination leg.",
+  "presentations": [
+    { "name": "issued-digest-to-intended-blocked", "issued_service_id": "github", "egress_destination": "github", "blocked": true }
+  ]
+}

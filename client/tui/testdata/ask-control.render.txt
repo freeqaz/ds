@@ -1,0 +1,15 @@
+::session attached  model=claude-sonnet-4-6  runtime=2.1.173  perm=default  cwd=/work  tools=[Bash]
+--state -> WORKING (requesting)
+$ tool Bash  {"command":"mkdir -p /work/scratch","description":"create scratch dir"}
+? ASK: approve Bash  {"command":"mkdir -p /work/scratch","description":"create scratch dir"}  [allow-once / allow-always(PROPOSAL) / deny]
+! ask resolved: ALLOW Bash
+= tool ok: SYNTHCREATED
+$ tool Bash  {"command":"rm -rf /work/scratch","description":"remove scratch dir"}
+? ASK: approve Bash  {"command":"rm -rf /work/scratch","description":"remove scratch dir"}  [allow-once / allow-always(PROPOSAL) / deny]
+! ask resolved: DENY Permission to use Bash with command rm -rf /work/scratch has been denied.
+= tool denied: Permission to use Bash with command rm -rf /work/scratch has been denied.
+> assistant: I created the scratch directory; the removal was denied so I left it in place.
+% quota none ok (provisional)
+==session success turns=3 dur=5200ms denials=1 reason=completed
+--state -> ATTACHED (turn_complete)
+[ session 000000000003 | state ATTACHED | success | seq 14 ]

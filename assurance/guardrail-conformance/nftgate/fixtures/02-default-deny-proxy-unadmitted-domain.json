@@ -1,0 +1,8 @@
+{
+  "row": "default-deny-outbound",
+  "kind": "proxied-tls-connect",
+  "domain": "evil.notallowed.example",
+  "dst_ip": "203.0.113.10",
+  "want": "refuse-at-egress-gateway",
+  "why": "via the proxy: the SNI names a domain not in the session allow-set, so TLS-1 refuses even though the original-dst IP 203.0.113.10 happens to be admitted for a DIFFERENT domain (the shared-CDN-IP hole stays closed; D4 via-proxy leg, doc 03 OQ1)"
+}

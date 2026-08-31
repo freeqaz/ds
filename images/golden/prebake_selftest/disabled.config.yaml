@@ -1,0 +1,23 @@
+# disabled.config.yaml — SYNTHETIC prebake config fixture (D50).
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Drives prebake.sh --self-test: the global kill-switch is OFF (enabled: false,
+# the D12 dynamic default) even though the SAME repo is opted in below. The
+# self-test asserts that the global switch short-circuits and NO repo is baked —
+# proving default-OFF holds whatever the repos[] list says. Invented repo names
+# only — never a real repo (D50: if it is in git, it is synthetic).
+enabled: false
+
+defaults:
+  base_image: /var/lib/ds/golden/m0-base.raw
+  output_dir: /var/lib/ds/golden/prebaked
+  warm_steps:
+    - npm ci
+    - npm run build
+
+repos:
+  - repo: github.com/acme/monorepo
+    prebake: true
+    branches:
+      - main

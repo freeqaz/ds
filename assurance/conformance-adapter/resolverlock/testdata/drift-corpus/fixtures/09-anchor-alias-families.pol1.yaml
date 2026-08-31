@@ -1,0 +1,21 @@
+# drift class: a YAML anchor/alias merge inside the document.
+# named edge shape: aliased families (anchor `&` / alias `*` + merge `<<`).
+# expected verdict (go, rust) = (reject, reject)  <-- the TRUE both-reject lockstep
+# Go: ErrUnsupportedShape — the line scanner cannot resolve `<<: *blk`; the real
+#     engine would, so it fails loudly rather than under-extract.
+# Rust: parse_layer is a stdlib block-structure reader with NO anchor/alias
+#     support; `<<: *blk` is a mapping value it cannot interpret as the schema
+#     subset, yielding a Syntax PolicyError.
+# This is the single fixture both readers reject on the SAME bytes — the direct
+# proof that a malformed shape both readers must reject produces a reject verdict
+# on BOTH sides (the gap this corpus was written to close).
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+common: &blk
+  reason: doh-resolver
+  rung: block+log
+blocklist:
+  - domain: dns.example
+    <<: *blk
+passthrough: []

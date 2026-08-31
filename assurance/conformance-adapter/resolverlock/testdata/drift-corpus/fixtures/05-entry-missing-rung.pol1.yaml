@@ -1,0 +1,16 @@
+# drift class: a blocklist entry omits its `rung:` field.
+# named edge shape: missing rung.
+# expected verdict (go, rust) = (reject, accept)
+# Go: ErrEntryMissingFields — every shipped resolver-lock entry carries a
+#     severing rung (§5/D53); a missing rung means the TLS-1 deny would not sever
+#     established flows on revocation.
+# Rust: BlockEntry.rung is Option<Rung>; absence parses to None (no PolicyError).
+#     The Rust TLS-1 suite asserts block-or-higher severance over the SHIPPED
+#     pack; the parse-time field-presence tripwire is the Go offline half.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+blocklist:
+  - domain: dns.example
+    reason: doh-resolver
+passthrough: []

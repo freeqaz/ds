@@ -1,0 +1,34 @@
+{
+  "kind": "transparent-git-clone",
+  "why": "doc 06 §2.2 row 2: a git-over-HTTPS client over the transparent path is INDISTINGUISHABLE from talking to a vanilla proxy. This golden pins the smart-HTTP handshake (GET info/refs advertisement) + the upload-pack/pack-data exchange SHAPE (headers byte-identical, pack data by digest, never object bytes) so a regression in the TLS-1 opaque tunnel OR the DS_TLS3_LIVE inspected path is caught by byte-identity replay.",
+  "sni": "git.conformance.example",
+  "info_refs": {
+    "method": "GET",
+    "path": "/repo.git/info/refs?service=git-upload-pack",
+    "request_headers": [
+      "git-protocol: version=2",
+      "host: git.conformance.example",
+      "user-agent: git/2.x"
+    ],
+    "response_status": 200,
+    "response_headers": [
+      "content-type: application/x-git-upload-pack-advertisement"
+    ],
+    "advertisement_digest": "sha256:1a390485748f432c1c8acf70e8e28a8b09c50eb1a1abace5771b04b755d0dc11",
+    "advertisement_len": 109
+  },
+  "upload_pack": {
+    "method": "POST",
+    "path": "/repo.git/git-upload-pack",
+    "request_headers": [
+      "content-type: application/x-git-upload-pack-request",
+      "host: git.conformance.example"
+    ],
+    "response_status": 200,
+    "response_headers": [
+      "content-type: application/x-git-upload-pack-result"
+    ],
+    "pack_data_digest": "sha256:df833b2d19f7886d0fa3a70e617c1dfc206eb73c2d2f16c0b686c2e2437b25d9",
+    "pack_data_len": 103
+  }
+}

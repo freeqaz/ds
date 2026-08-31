@@ -1,0 +1,27 @@
+[package]
+name = "ds-nft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The cgo bridge (orchestrator/internal/nftbridge/) links this crate as a C-ABI
+# staticlib for the Go host agent. The `rlib` keeps the in-workspace Rust callers
+# (ds-dnsgate, the crate's own tests) building as before; `staticlib` emits the
+# `.a` the Go host agent links the extern-C surface in `src/ffi.rs` against
+# (declarations in `include/ds_nft.h`). The ABI is the create/delete-tap +
+# flush-session FFI scaffold — the per-session INSTANTIATE write symbol is held
+# back (no `ds_nft_instantiate_session`) pending the consolidated AttachPrimitive
+# spec + ratification (D1/D2/D3).
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+# The ONLY dependency (doc 14 §6, D67/D40): ds-contracts supplies the mark
+# constants, DS_MARK_MASK, and the `flush_session` signature this crate
+# implements against. The netlink mechanism is FREE (doc 11 §4); under the
+# workspace offline / stdlib-only constraint this crate emits `nft -f` batch
+# text + `conntrack -D` argv and pulls in NO external crate. The boundary
+# framework crates and the async runtime are a frozen non-edge here (doc 14 §6);
+# the dataplane/ READMEs name the pinned dependency choices.
+ds-contracts = { path = "../ds-contracts" }

@@ -1,0 +1,209 @@
+#!/usr/sbin/nft -f
+#
+# NFT-3b — Stage-3 OUTPUT-chain containment for ds-tlsproxy upstream egress (D76).
+# artifact-version: 1
+# governing: doc 12 §4.2 (the D76 kernel defense-in-depth layer) · doc 09 §5 (TLS-1)
+#            · doc 14 §5 (mark-space layout, mask discipline, flush_session)
+#            · doc 06 §3(c) (bugged-deputy containment) · D44 D69 D72 D73 D76
+#
+# WHAT THIS IS
+#   The versioned, declarative Stage-3 OUTPUT-chain enforcement layer. It bounds
+#   the proxy's *own* host-egress (the marked upstream leg) to the union of the
+#   per-session admitted IPs ds-dnsgate already authorizes, and turns an
+#   unmarked or unauthorized connect from the proxy UID into a fail-closed
+#   drop + nflog event. It is a BUILD ARTIFACT installed by a systemd unit, never
+#   hand-applied state — if you are typing `nft` into a host shell, you are doing
+#   it wrong (doc 09 §3).
+#
+#   Like NFT-4 it lives in its OWN `inet` table (`ds_proxy_out`) so it layers on
+#   top of the NFT-1 floor without re-authoring it: NFT-1's `output` chain stays
+#   `policy accept` (host egress unconstrained at Stage 1, doc 09 §3), and this
+#   Stage-3 containment rides here, reversible with a single
+#   `nft delete table inet ds_proxy_out`. Removing it returns host egress to the
+#   NFT-1 baseline ("connect anywhere") — the layer never makes things worse than
+#   the no-layer baseline (doc 12 §4.2, the D76 honest-bug-containment framing).
+#
+# WHY THIS LAYER (doc 12 §4.2, D76 — non-gating Stage-3 hardening, off M1 gate)
+#   It is honest bug containment + kernel-attributed audit, NOT compromise
+#   containment: a full RCE in the proxy holds credential-swap material and is
+#   catastrophic regardless, and a CAP_NET_RAW AF_PACKET egress bypasses the inet
+#   OUTPUT chain entirely. What it buys: bounds the highest-likelihood bug surface
+#   (the bespoke TLS-1 SNI-peek / re-admission, TLS-2 CONNECT, TLS-5 swap
+#   upstream-selection code — the confused-deputy / SSRF shape) to ∪(admitted IPs
+#   across sessions), which excludes RFC1918 / link-local / host ranges by DNS-4
+#   construction; and the marked upstream leg gives LOG-2 kernel flow records for
+#   the proxy's host-egress, closing LOG-4's uplink-reconciliation hole.
+#
+# SCOPE TO THE PROXY UID (doc 12 §4.2)
+#   The chain is scoped to ds-tlsproxy's UID via `meta skuid`. Host-originated
+#   egress from any OTHER uid (the host agent, ds-dnsgate's own resolution leg,
+#   package mirrors, ops access) is not this layer's concern — it falls through
+#   to NFT-1's accepting `output` chain untouched (this table only ever drops a
+#   packet it explicitly owns; everything it does not match is `accept`-by-policy
+#   here so non-proxy egress is never affected). The proxy user is install-time
+#   data: the `$proxy_uid` define below is resolved when the artifact ships, the
+#   same way the per-session tap index and allow-set names are runtime data, not
+#   baked into the source. The CAP_NET_RAW-only / never-CAP_NET_ADMIN posture for
+#   that UID is the host-baseline obligation (doc 12 §4.2, ../host-baseline/),
+#   consumed here by reference: a compromised proxy must not be able to rewrite
+#   the very ruleset that contains it (only ds-dnsgate / the host agent writes
+#   nftables objects).
+#
+# MARKS (D76, doc 14 §5) — STRICT MASK DISCIPLINE
+#   Every match of a DS mark goes through the explicit `& DS_MARK_MASK` clamp
+#   (the Tailscale PR-5606 lesson, doc 14 §5). The ONLY mark literal that appears
+#   in this file is the frozen `DS_MARK_MASK` mask constant itself, written as a
+#   define sourced from `ds-contracts` (ds_contracts::mark::DS_MARK_MASK =
+#   0xFF003FFF, doc 14 §5). No mark *value* is ever typed inline: the per-session
+#   `0x2` ds-tlsproxy-upstream marks (ds_contracts::mark::Leg::TlsproxyUpstream)
+#   are vmap KEYS added at runtime by ds-nft from the constants, and the `0x4`
+#   infrastructure-egress mark (ds_contracts::mark::Leg::InfraEgress) is matched
+#   via the symbol-fed `@infra_out_marks` set, never an inline literal. This file
+#   touches NO bit in the permanently-unclaimed gap 23–14 (doc 14 §5) and writes
+#   no mark register — it only MATCHES marks the upstream-socket SO_MARK path
+#   (ds-tlsproxy, mark-before-connect) already set. The CI mark lint
+#   (ds-contracts ds-nft-mark-lint, scripts/lint-nft-artifacts.sh) enforces all
+#   of this.
+#
+# FAMILY (D75, doc 14 §11)
+#   Authored `inet` so the IPv6 twins are dropped by the dormant-v6 default. The
+#   per-session vmap dispatches to the v4 allow-set (`@allow4_<session>`) today;
+#   the `@allow6_<session>` twin (doc 09 §3 NFT-3) stays dormant until v6 turns
+#   on end to end (DNS-1/OQ10), at which point the per-session chain template
+#   below grows its `ip6 daddr @allow6_<session>` line.
+#
+# SETS / MAPS / PER-SESSION CHAINS ARE RUNTIME STATE (NFT-6, doc 14 §5)
+#   This artifact ships the EMPTY map/set skeletons and the documented per-session
+#   chain SHAPE; the per-session `out_<session>` chains, the `@session_out` vmap
+#   elements (keyed on the `0x2`-leg mark), and the `@infra_out_marks` element are
+#   added / removed by `ds-nft` on the SAME atomic session create / destroy
+#   transactions as NFT-6 (doc 12 §4.2: "vmap element add/remove rides the same
+#   atomic session create/destroy transactions as NFT-6"). The allow-set CONTENT
+#   (`@allow4_<session>`) is owned solely by ds-dnsgate (doc 09 §3 NFT-3) — this
+#   table REUSES those sets by name (single source of truth, no data
+#   duplication), it never writes an element into them.
+#
+# PARSE-CHECK (doc 06 (c) cadence)
+#   `nft -c -f nft-3b-output.nft` is a full kernel-aware check; the `log`/`nflog`
+#   and `vmap` expressions bind to the kernel even in check-only mode, so in a
+#   container/sandbox without the modules loadable (or without a private netns)
+#   `-c` may report a cache-init / "Could not process rule" ceiling — an
+#   environment limit, not a grammar failure (the same ceiling
+#   nft-4-resolver-closure.nft documents). Run on a host with the modules,
+#   or `unshare -rn nft -c -f nft-3b-output.nft` for a private-netns grammar
+#   check. Verify the unit with
+#   `systemd-analyze verify ds-nft-output-bootstrap.service`.
+
+# Install-time data: the proxy UID. Resolved when the artifact ships into the
+# boundary image (the ds-tlsproxy service user), the same class of runtime data
+# as the per-session tap index. The numeric default below is a strawman; the
+# image build substitutes the real uid. This is NOT a mark literal — it is a
+# uid selector for `meta skuid`.
+define proxy_uid = 0xFFFFFFFE	# 4294967294 (nobody-class strawman; image build substitutes the ds-tlsproxy uid)
+
+# The frozen DS mark mask (ds_contracts::mark::DS_MARK_MASK, doc 14 §5, D76).
+# This is the ONLY mark literal allowed inline — it is the structural mask, not a
+# mark value. Mark VALUES (the 0x2 upstream-leg and 0x4 infra-leg marks) are
+# fed as vmap keys / set elements from ds-contracts at runtime, never typed here.
+define DS_MARK_MASK = 0xFF003FFF
+
+# Idempotent install: drop and recreate ONLY our own table. We never touch
+# ds_boundary (NFT-1), ds_resolver_closure (NFT-4), or any other netns table.
+table inet ds_proxy_out
+delete table inet ds_proxy_out
+
+table inet ds_proxy_out {
+
+	# ---- Per-session OUTPUT dispatch vmap (NFT-6 runtime state) ----------------
+	# Keyed on the masked DS mark; the value is the per-session `out_<session>`
+	# verdict chain (a `jump`). ds-nft adds an element
+	#   { <0x2-leg mark for session S> : jump out_<S> }
+	# on session create and removes it on destroy, in the same atomic transaction
+	# as the NFT-6 teardown (doc 12 §4.2). The mark KEYS come from ds-contracts
+	# (ds_contracts::mark::compose(Leg::TlsproxyUpstream, host_session_index)) —
+	# never authored inline here, so no mark value literal appears in this file.
+	# Ships EMPTY: a freshly bootstrapped host has no sessions.
+	map session_out {
+		type mark : verdict
+	}
+
+	# ---- Infrastructure-egress marks (NFT-6 runtime state) ---------------------
+	# The set of `0x4` infrastructure-egress marks (ds_contracts::mark::Leg::
+	# InfraEgress) the proxy is permitted to use for its own infra traffic (e.g. a
+	# flowlog ship / policy-subscriber leg that legitimately runs under the proxy
+	# uid). Symbol-fed from ds-contracts so no `0x4` mark VALUE is ever typed
+	# inline. Ships EMPTY; populated only if the deployment runs such a leg under
+	# the proxy uid.
+	set infra_out_marks {
+		type mark
+	}
+
+	# ---- The OUTPUT enforcement chain -----------------------------------------
+	# Scoped to the proxy UID. Default DROP: an unmarked or unauthorized connect
+	# from the proxy is a fail-closed drop + nflog event (doc 12 §4.2: "an
+	# unmarked connect from the proxy UID is a bug; once the OUTPUT chain lands it
+	# is a fail-closed drop + nflog event").
+	chain proxy_output {
+		type filter hook output priority filter; policy accept;
+
+		# Everything that is NOT the proxy uid leaves this layer alone — it falls
+		# through to NFT-1's accepting output chain. We only ever scope rules to
+		# the proxy uid below; this table imposes nothing on other host egress.
+		meta skuid != $proxy_uid accept
+
+		# (1) Return / already-established proxy flows ride conntrack and are
+		#     never re-checked against the allow-set (the upstream leg of an
+		#     admitted flow stays up even if the admission entry later expires —
+		#     the doc 09 §3 / D68 expiry-gates-new-flows-only property). This is
+		#     the OUTPUT-side twin of NFT-1's established/related accept.
+		ct state established,related accept
+
+		# (2) Per-session dispatch: clamp the mark with the frozen mask and look
+		#     the `0x2` upstream-leg mark up in @session_out, jumping to the
+		#     session's own `out_<session>` verdict chain. Mask discipline is
+		#     explicit (`& $DS_MARK_MASK`) — the only mark literal in the file is
+		#     the mask itself; the per-session mark KEYS are runtime vmap state
+		#     from ds-contracts (doc 14 §5). A NEW proxy flow whose mark is not in
+		#     the map (no live session, or an unmarked socket) falls through to
+		#     the default drop below — fail-closed.
+		meta mark & $DS_MARK_MASK vmap @session_out
+
+		# (4) Infrastructure-egress accept: a `0x4` infra-leg mark the proxy is
+		#     permitted to carry (flowlog ship / policy subscriber under the proxy
+		#     uid, if any) is accepted. Matched against the symbol-fed
+		#     @infra_out_marks set under the same explicit mask — no inline 0x4
+		#     value (doc 14 §5). Empty by default, so this is a no-op until a
+		#     deployment populates it.
+		meta mark & $DS_MARK_MASK @infra_out_marks accept
+
+		# (5) Default fail-closed: an unmarked / unauthorized connect from the
+		#     proxy uid is a BUG (every upstream socket must carry a DS mark
+		#     before connect — doc 12 §4.2, mark-before-connect, frozen). nflog it
+		#     to group 2 (the LOG-2 upstream-leg stream ds-flowlog consumes) for
+		#     kernel-attributed audit, then drop. This is the bugged-deputy
+		#     containment backstop (doc 06 §3(c)).
+		log prefix "ds-nft3b proxy-out-default-drop " group 2 counter drop
+	}
+
+	# ---- Per-session OUTPUT verdict chain TEMPLATE (NFT-6 runtime state) -------
+	# DOCUMENTED SHAPE ONLY — not instantiated in this artifact. On session
+	# create ds-nft adds a regular chain `out_<session>` with the body below and a
+	# `@session_out` vmap element keying that session's `0x2` mark to `jump
+	# out_<session>`; on destroy it removes both, atomically with the NFT-6
+	# teardown (doc 12 §4.2). The chain REUSES ds-dnsgate's NFT-3 per-session
+	# allow-set `@allow4_<session>` by name (single source of truth — this table
+	# never writes an element into it):
+	#
+	#   chain out_<session> {
+	#       ip daddr @allow4_<session> accept
+	#       # (v6 twin, dormant until DNS-1/OQ10 turns IPv6 on end to end:)
+	#       # ip6 daddr @allow6_<session> accept
+	#       log prefix "ds-nft3b out-<session>-drop " group 2 counter drop
+	#   }
+	#
+	# A marked upstream connect to an admitted IP traverses the allow-set and is
+	# accepted; a connect to a denied public IP or an RFC1918 address (which the
+	# allow-set never contains by DNS-4 construction) hits the per-session
+	# `log ... drop`, nflog'd and attributed to the correct session (the doc 06
+	# §3(c) bugged-deputy-containment assertion).
+}

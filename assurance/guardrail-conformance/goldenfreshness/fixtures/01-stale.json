@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthetic VIOLATION (a): a STALE golden. acme/monorepo@main is present but 48h old against a 24h rotation window — a nightly run was missed, so it is past the window and must be rolled before any new session clones from it. Must FAIL with the named class golden-stale-past-rotation-window.",
+  "policy": { "max_age_hours": 24 },
+  "goldens": [
+    { "repo": "acme/monorepo", "branch": "main",    "present": true, "age_hours": 48 },
+    { "repo": "acme/service",  "branch": "main",    "present": true, "age_hours": 6 }
+  ]
+}

@@ -1,0 +1,24 @@
+# ds-mirror-refresh.timer — schedule for ds-mirror-refresh.service.
+#
+# Keeps the host-local bare mirrors warm so session-create and per-VM worktree
+# clones (M2 instant-start; M3 subagent fan-out) hit a recent local copy
+# instead of stampeding the upstream source host. Default cadence is every
+# 15 minutes with jitter so a fleet of hosts does not refresh in lockstep.
+#
+# config-as-code: tune OnUnitActiveSec to the team's churn; the value is policy,
+# not load-bearing for correctness (a cold ref simply falls through to an
+# on-demand refresh in mirror.sh).
+
+[Unit]
+Description=Refresh Dream Serpent host-local git mirrors on a schedule
+Documentation=https://example.invalid/dream-serpent/images/mirror/README.md
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+RandomizedDelaySec=2min
+Persistent=true
+Unit=ds-mirror-refresh.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,69 @@
+# git-https-pin.gitconfig — D83/§5.3 git-over-HTTPS pin, baked into the M0 base
+# image at /etc/gitconfig (the system git config) by build-m0-image.sh.
+#
+# WHY (doc 16 §5.3, adopted under D83's "may pin" allowance; aligned with doc 09
+# POL-2's baseline "golden image configures git for HTTPS"):
+# git-over-SSH cannot ride the TLS-terminating egress gateway, so it gets its own
+# remote-signing seam (D83 §5.3) — built post-v0. Until that seam exists, an
+# accidental git-over-SSH path from the guest would silently bypass BOTH the
+# credential-swap plane (the TLS-termination/egress-gateway header swap, doc 16
+# §5) AND the secret-scanning plane (doc 12). So the v0 golden image pins every
+# git remote to HTTPS: an `insteadOf` rewrite folds the SSH remote forms back
+# onto `https://github.com/`, and a credential helper carries the PAT the
+# egress-gateway header-swap expects. SSH-git is an explicit, TESTED non-goal
+# (verify-git-pin.sh, doc 16 §13 HTTPS-pin assertion) — the pin is asserted, not
+# hoped.
+#
+# The credential helper here is the GUEST-SIDE half only: it presents whatever
+# placeholder the host injects per-session over the (default-deny, gated) egress
+# path; the REAL long-lived credential never enters the VM — the TLS-terminating
+# egress gateway swaps the real PAT into the upstream Authorization header
+# outside the guest (doc 16 §5 / D83). The image bakes the helper WIRING; it
+# never bakes credential material (runtime ignorance, D20). `store` reads the
+# host-injected token file at the reserved drop path; if that file is absent the
+# push fails closed (no token, no auth) rather than falling back to SSH.
+#
+# Revisit trigger (doc 16 §5.3 / OQ4): a design partner whose workflow cannot
+# move to HTTPS git — at which point the SSH remote-signing seam is built and
+# this pin is relaxed as a visible, D-numbered reopening.
+#
+# Per-NIC/per-host note: the rewrite is keyed on github.com (the one source-
+# control host POL-2 admits, doc 09); the broad `ssh://` -> `https://` rewrite is
+# the belt to that suspenders so a hand-typed `ssh://host/...` for any admitted
+# host also folds to HTTPS rather than escaping to a transport the gateway cannot
+# see. `git@github.com:owner/repo` (scp-style) and `ssh://git@github.com/...`
+# both fold onto `https://github.com/owner/repo`.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# --- insteadOf: rewrite every SSH remote form onto HTTPS BEFORE transport ---
+# git applies url.<base>.insteadOf at remote-resolution time (before it ever
+# selects a transport), so an SSH remote can never reach the ssh transport: the
+# URL is already https:// by the time git chooses how to connect.
+[url "https://github.com/"]
+	insteadOf = ssh://git@github.com/
+	insteadOf = git@github.com:
+	insteadOf = ssh://git@github.com:
+	insteadOf = git+ssh://git@github.com/
+
+# Belt to the github suspenders: any other admitted host typed as an ssh:// URL
+# also folds to HTTPS rather than escaping to the unseen SSH transport.
+[url "https://"]
+	insteadOf = ssh://
+	insteadOf = git+ssh://
+
+# --- credential helper: carry the host-injected PAT over HTTPS ---
+# The guest-side helper presents the per-session token the host injects at the
+# reserved drop path; the TLS-terminating egress gateway swaps the REAL PAT in
+# outside the VM (doc 16 §5 / D83). The real long-lived credential never enters
+# the guest. `store` with an explicit file pins WHERE the host drops the token;
+# an absent file means no auth -> the push fails closed (never an SSH fallback).
+[credential]
+	helper = store --file=/run/ds/git/credentials
+
+# Defense in depth against an interactive prompt that could stall a headless
+# session or coax a human into an out-of-band SSH workaround: never prompt.
+[credential]
+	# A missing token fails closed at the HTTPS auth step, in band, rather than
+	# hanging on a terminal prompt.
+	useHttpPath = true

@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthetic VIOLATION (b): a MISSING golden. acme/newrepo@main is opted in but has never been baked (present=false) — it cannot back a session until the first bake produces it. Must FAIL with the named class golden-missing-never-baked.",
+  "policy": { "max_age_hours": 24 },
+  "goldens": [
+    { "repo": "acme/monorepo", "branch": "main",    "present": true,  "age_hours": 3 },
+    { "repo": "acme/newrepo",  "branch": "main",    "present": false, "age_hours": 0 }
+  ]
+}

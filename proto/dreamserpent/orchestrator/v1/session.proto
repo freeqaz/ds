@@ -1,0 +1,322 @@
+// The control-plane SessionService — how clients, the host agent, and paid
+// services create, watch, attach to, and govern sessions (doc 15 §5.3).
+//
+// Names ratified in D35; messages freeze at M0 EXCEPT as marked. [OSS] public
+// contract (D24/D58/D80): orchestrator-lite (OSS) and the paid fleet control
+// plane implement the SAME package (D80). M0 freeze package (FREEZE.md
+// `dreamserpent.orchestrator.v1` row): bodies + baseline + flip land together; a
+// field missed at this one-shot freeze is a v2-package event.
+//
+// CROSS-PACKAGE OWNERSHIP (the header's "except as marked", doc 15 §5.3):
+//   - the WatchSession event vocabulary is attach.v1.SessionEvent (the D18
+//     fan-out leg; the consolidated M0 attach-event checklist, doc 15 §6/§6.1) —
+//     IMPORTED, never re-declared;
+//   - the Attach handle is attach.v1.AttachHandle (D79, doc 15 §5.4) — imported;
+//   - the policy-stream messages (PolicySnapshot) and the POL-3 Provenance struct
+//     are boundary.v1-owned (policy.proto here imports them).
+// This package imports attach.v1, so it freezes as one wave with or AFTER
+// attach.v1, never ahead of it (check-freeze-riders.sh CHECK 5b; attach.v1 is
+// FROZEN).
+//
+// WHAT MUST NOT LIVE HERE: any Mint RPC — the orchestrator FRONTS the mint
+// (D35) but the IdentityMint service and its messages are owned EXCLUSIVELY by
+// dreamserpent.identity.v1 (D82, doc 16 §4/§9), the invariant that keeps an
+// orchestrator/KVM compromise from yielding signing keys (D22/D39). Enrollment
+// (D56), escape-hatch catalog (D45), policy authoring, metering views (D57)
+// freeze with the M2 product band, not at M0.
+syntax = "proto3";
+
+package dreamserpent.orchestrator.v1;
+
+// AttachHandle (D79) and the SessionEvent union (the §3 + §6.1 event vocabulary)
+// are owned by dreamserpent.attach.v1 (doc 15 §5.4, §6.1) — imported, never
+// re-declared. WatchSession returns the SessionEvent stream; Attach returns the
+// AttachHandle.
+import "dreamserpent/attach/v1/attach_handle.proto";
+import "dreamserpent/attach/v1/events.proto";
+
+// PermissionPosture is the agent-runtime permission disposition (doc 13 §2),
+// owned by dreamserpent.runtime.v1 (entrypoint_config.proto) — imported here,
+// NEVER re-declared (the same import-the-vocabulary discipline this package
+// follows for attach.v1.SessionState/SuspendReason; the SessionRef-inline
+// exception does not apply to an enum vocabulary). runtime.v1 is FROZEN
+// (FREEZE.md row 21) and imports only boundary.v1, so this import adds no cycle.
+// Carried on CreateSessionRequest.posture below as the orchestrator-forwarded,
+// externally-resolved per-session posture DATA (the orchestrator stays
+// runtime-IGNORANT about HOW it was decided — POL-1 resolution).
+import "dreamserpent/runtime/v1/entrypoint_config.proto";
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/orchestrator/v1;orchestratorv1";
+
+// SessionService is the session control-plane surface (D35 names; doc 15 §5.3).
+// Each RPC takes a `<Verb>Request` and returns a `<Verb>Response` per buf
+// STANDARD (RPC_REQUEST_RESPONSE_UNIQUE): the lifecycle verbs all surface a
+// Session record, so each wraps it in its own response; the imported attach.v1
+// SessionEvent / AttachHandle are likewise wrapped (the boundary.v1
+// WatchPoliciesResponse precedent) so a stream/reply grows optional fields
+// post-freeze without a v2.
+service SessionService {
+  // CreateSession runs the §4.1 canonical create with the D56 two-key
+  // structural refusal; returns the created Session record.
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+
+  // DestroySession tears a session down (returns the terminal record).
+  rpc DestroySession(DestroySessionRequest) returns (DestroySessionResponse);
+
+  // SuspendSession / ResumeSession / SnapshotSession are the lifecycle verbs the
+  // control plane drives onto the hypervisor.v1 driver (doc 15 §4.2/§4.3).
+  rpc SuspendSession(SuspendSessionRequest) returns (SuspendSessionResponse);
+  rpc ResumeSession(ResumeSessionRequest) returns (ResumeSessionResponse);
+  rpc SnapshotSession(SnapshotSessionRequest) returns (SnapshotSessionResponse);
+
+  // ListSessions enumerates sessions (fleet/console views).
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+
+  // WatchSession is the D18 session-event fan-out leg; D61 one-writer/N-reader
+  // is enforced SERVER-SIDE at this terminator. EVERY event carries a sequence
+  // number from M0 (attach.v1.SessionEvent.seq, reserved so replay/spectate add
+  // without a v2); the event vocabulary is the doc 15 §3 machine incl. PARKED +
+  // D77 reasons (the consolidated M0 attach-event checklist, doc 15 §6/§6.1).
+  // Canvas and console subscribe as ordinary N-th readers; the writer seat lives
+  // in the session record (a D61 driver handoff is a record mutation with
+  // attribution).
+  rpc WatchSession(WatchSessionRequest) returns (stream WatchSessionResponse);
+
+  // Attach returns the D79 transport-ambivalent handle (doc 15 §5.4); the handle
+  // message is attach.v1-owned, wrapped here.
+  rpc Attach(AttachRequest) returns (AttachResponse);
+
+  // CreateChildSession is RESERVED at M0, implemented M3 (doc 15 §5.3): the D18
+  // wrapper calls back to spawn subagent/worktree sessions. The RPC and its
+  // request/response are reserved as the message SHAPE now so the M3 wiring is
+  // additive; the minimal honest in-process leg already lives in
+  // orchestrator/internal/sessions/childsession.go and touches NO proto (it
+  // derives narrower tokens offline, zero mint RPCs) — this RPC stays
+  // M0-reserved-until-M3 (doc 15 §5.3).
+  rpc CreateChildSession(CreateChildSessionRequest) returns (CreateChildSessionResponse);
+
+  // RecordEnvConfig records a D7 env/build config and returns a reference
+  // (doc 15 §5.3/§5.6) — REFERENCE shape only; the env-spec schema itself is
+  // UNOWNED (doc 15 OQ10), so this freezes the ref it stores, not the schema.
+  rpc RecordEnvConfig(RecordEnvConfigRequest) returns (RecordEnvConfigResponse);
+}
+
+// CreateSessionRequest opens the §4.1 canonical create (doc 15 §5.3). The D56
+// two-key structural refusal is enforced by the control-plane handler before any
+// VM is materialized; the request carries both keys' references.
+message CreateSessionRequest {
+  // The repo / target the session works on (D56 control-plane enrollment key).
+  string repo_id = 1;
+
+  // The checked-in env-spec reference (D7/D56 — the second key). Resolves to the
+  // content-addressed image identity at create (doc 15 §9).
+  string env_config_ref = 2;
+
+  // The user on whose behalf the session is created — the doc 04 §5 attribution
+  // root claim (D99 `launching_user`). The §4.1-step-5 base token is minted on
+  // behalf of this user by identity.v1's mint (NOT here — no Mint RPC in this
+  // package).
+  string launching_user = 3;
+
+  // Optional ROLE reference (session role, doc 18 §6). INCLUDED in the M0
+  // inventory (D95/D106, ratified 2026-06-12 — was doc 18 P-T2): resolved against
+  // the org catalog and pinned `(role_name, role_version, role_content_hash)`
+  // into the session record at create; the catalog RPCs live in the reserved
+  // roles.v1, NEVER here, and the field rides THIS package's M0 freeze (the
+  // roles package never owns it). An unused optional field admits nothing — its
+  // presence pre-ratified no roles design (D106) — the same one-field-now-vs-v2-
+  // later argument that carried D79's endpoint candidates. Empty => no session
+  // role.
+  string role_ref = 4;
+
+  // The OPTIONAL orchestrator-resolved per-session permission posture
+  // (dreamserpent.runtime.v1.PermissionPosture, doc 13 §2): the externally
+  // resolved POL-1/role posture the orchestrator forwards as DATA to the gap-1
+  // EntrypointConfig producer (via sessions.CreateRequest.Posture ->
+  // hypervisor.v1.VmSpec.posture -> the libvirt create path). The orchestrator
+  // stays runtime-IGNORANT about HOW it was decided; it only carries the resolved
+  // enum. ADDITIVE M0-window rider (the next free field after role_ref = 4,
+  // mirroring the has_writer = 15 rider recipe): an unset value decodes
+  // PERMISSION_POSTURE_UNSPECIFIED = 0, byte-identical to the pre-rider wire, and
+  // UNSPECIFIED falls back to the daemon-pinned LOCKED at the producer (the M0
+  // default-deny fallback preserved); a CONCRETE value WINS over that fallback.
+  dreamserpent.runtime.v1.PermissionPosture posture = 5;
+}
+
+// Session is the control-plane session record returned by the lifecycle verbs
+// (doc 15 §5.3/§5.6). It surfaces the persisted record shape the control-plane
+// store (orchestrator/internal/store, doc 15 §5.6) is the authority for — the
+// SessionRef quartet plus the create-time references and lifecycle state. The
+// FULL record (per-host index history, live grant list, metering timestamps) is
+// store-internal; this message is the wire projection the verbs return.
+message Session {
+  // The SessionRef quartet (D66/D44) — the never-recycled per-host join keys.
+  // Carried inline (this package does not import boundary.v1.SessionRef on the
+  // create path; the quartet is the authority's own record fields here).
+  string session_uuid = 1;
+  string host_id = 2;
+  uint64 host_session_index = 3;
+  string tap_name = 4;
+
+  // Create-time references (D7/D74/D22/D17/D73).
+  string env_config_ref = 5;
+  string image_id = 6;                 // resolved content-addressed image identity (D74; D107 role-layer fold)
+  string launching_user = 7;           // attribution root (D99)
+
+  // The pinned session role triple (D95/D106; doc 18 §11). Set IFF the create
+  // carried a role_ref: resolved against the org catalog and pinned so a catalog
+  // update mid-flight does NOT change a pinned session (doc 18 §11 pin-and-audit).
+  string pinned_role_name = 8;
+  string pinned_role_version = 9;
+  bytes pinned_role_content_hash = 10; // the roles/SCHEMA.md canonical content hash
+
+  // Lifecycle state — the doc 15 §3 machine. attach.v1.SessionState is the
+  // single §3 vocabulary source (doc 15 §3, §6.1 row 3), imported, never
+  // re-declared.
+  dreamserpent.attach.v1.SessionState state = 11;
+
+  // Lifecycle timestamps (D57 metering input; unix seconds).
+  uint64 created_at = 12;
+  uint64 updated_at = 13;
+
+  // Parent-session link (D18 fan-out, D61 hierarchy) — empty for a root session;
+  // set for a CreateChildSession spawn (RESERVED-until-M3 path).
+  string parent_session_uuid = 14;
+
+  // Writer-seat presence (D78/D61): true iff a human holds the session's one
+  // writer seat (the session is ATTENDED). The server-side projection computes it
+  // from the authoritative record seat via the SAME attendedness verdict the
+  // writer-seat steal gate and the idle reaper read (writer-attached-only interim,
+  // §5.5). ADDITIVE M0-window rider 2026-06-19 (the next free field after 14): an
+  // unset value decodes false (writer-less), byte-identical to the pre-rider wire.
+  bool has_writer = 15;
+}
+
+// The lifecycle verbs all surface a Session record; each gets its own
+// `<Verb>Response` wrapper (buf STANDARD RPC_REQUEST_RESPONSE_UNIQUE). The wrapper
+// keeps each reply additive-extensible (it can grow optional per-verb fields
+// post-freeze without a v2).
+message CreateSessionResponse {
+  Session session = 1;
+}
+message DestroySessionResponse {
+  Session session = 1;
+}
+message SuspendSessionResponse {
+  Session session = 1;
+}
+message ResumeSessionResponse {
+  Session session = 1;
+}
+message SnapshotSessionResponse {
+  Session session = 1;
+}
+message CreateChildSessionResponse {
+  Session session = 1;
+}
+
+// DestroySessionRequest names the session to tear down (doc 15 §5.3).
+message DestroySessionRequest {
+  string session_uuid = 1;
+}
+
+// SuspendSessionRequest pauses a session (doc 15 §5.3); the control plane drives
+// the D77-narrowed reason onto the hypervisor.v1 driver. The reason is carried as
+// the §3 read-only projection (attach.v1.SuspendReason); the AUTHORITATIVE reason
+// + provenance ride hypervisor.v1.SuspendRequest, not this control-plane verb.
+message SuspendSessionRequest {
+  string session_uuid = 1;
+  dreamserpent.attach.v1.SuspendReason reason = 2;
+}
+
+// ResumeSessionRequest restarts a suspended session (doc 15 §5.3).
+message ResumeSessionRequest {
+  string session_uuid = 1;
+}
+
+// SnapshotSessionRequest captures a session (doc 15 §5.3).
+message SnapshotSessionRequest {
+  string session_uuid = 1;
+  string label = 2;
+}
+
+// ListSessionsRequest filters/pages the session enumeration (doc 15 §5.3).
+message ListSessionsRequest {
+  string host_id = 1;                  // optional host filter; empty => fleet-wide
+  string launching_user = 2;           // optional attribution filter
+  uint32 page_size = 3;
+  string page_token = 4;
+}
+
+// ListSessionsResponse pages the enumeration (doc 15 §5.3).
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+  string next_page_token = 2;
+}
+
+// WatchSessionRequest opens the D18 fan-out stream (doc 15 §5.3). `from_seq`
+// requests replay from a per-event sequence number (the attach.v1.SessionEvent
+// .seq a slow N-reader recovers by, without re-attaching); from_seq = 0 streams
+// from the current frontier.
+message WatchSessionRequest {
+  string session_uuid = 1;
+  uint64 from_seq = 2;
+}
+
+// WatchSessionResponse is one streamed fan-out frame (doc 15 §5.3): it carries
+// exactly one attach.v1.SessionEvent (the §3 + §6.1 event vocabulary, imported
+// and never re-declared). The buf-STANDARD per-RPC stream wrapper keeps the
+// frame additive-extensible without a v2; the per-event `seq` lives ON the
+// SessionEvent (attach.v1 §6.1 row 1), never duplicated here.
+message WatchSessionResponse {
+  dreamserpent.attach.v1.SessionEvent event = 1;
+}
+
+// AttachRequest names the session and the seat class to attach as (doc 15 §5.4).
+// D61 one-writer/N-reader arbitration is server-side at the WatchSession
+// terminator; this requests the seat the returned attach.v1.AttachHandle grants.
+message AttachRequest {
+  string session_uuid = 1;
+  dreamserpent.attach.v1.Role role = 2; // WRITER | READER (D61)
+}
+
+// AttachResponse wraps the attach.v1-owned handle (doc 15 §5.4). The handle
+// message stays attach.v1-owned and imported; this is the SessionService reply
+// envelope (buf-STANDARD per-RPC response).
+message AttachResponse {
+  dreamserpent.attach.v1.AttachHandle handle = 1;
+}
+
+// CreateChildSessionRequest is RESERVED at M0, implemented M3 (doc 15 §5.3): the
+// D18 wrapper-callback spawn request. The fields carry the parent link, policy
+// posture, identity lineage, and worktree inheritance the M3 implementation will
+// consume; reserved as shape now so the wiring is additive (the in-process leg in
+// childsession.go derives narrower tokens offline and touches no proto).
+message CreateChildSessionRequest {
+  string parent_session_uuid = 1;      // D18 parent link / D61 hierarchy edge
+  string env_config_ref = 2;           // worktree/env inheritance (D7)
+  string role_ref = 3;                 // optional child session role (doc 18 §6)
+  string requested_by = 4;             // the wrapper node requesting the spawn
+}
+
+// RecordEnvConfigRequest records a D7 env/build config (doc 15 §5.3/§5.6). The
+// body is the checked-in or request-carried env spec; the env-spec SCHEMA is
+// UNOWNED (doc 15 OQ10), so it is opaque here — this seam freezes the reference
+// shape it stores, not the schema.
+message RecordEnvConfigRequest {
+  string repo_id = 1;
+  bytes env_spec = 2;                  // opaque env-spec body (schema UNOWNED, doc 15 OQ10)
+}
+
+// EnvConfigRef is the stored reference to a recorded env config (D7; doc 15
+// §5.3) — the content-addressed handle CreateSession's env_config_ref resolves.
+message EnvConfigRef {
+  string ref = 1;                      // content-addressed env-config reference
+}
+
+// RecordEnvConfigResponse wraps the stored EnvConfigRef (the buf-STANDARD
+// per-RPC response, doc 15 §5.3). The reference shape is what freezes here, not
+// the UNOWNED env-spec schema (doc 15 OQ10).
+message RecordEnvConfigResponse {
+  EnvConfigRef env_config_ref = 1;
+}

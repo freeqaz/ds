@@ -1,0 +1,297 @@
+{
+  "_comment": "SYNTHETIC cia-parity match-key vectors — single source of truth for both the offline TestMatchKeyCIAParity pin and the env-gated DS_CIA_PARITY drift check. Each vector's `key` is the cia-byte-compatible match key, derived directly from the REAL cia.cassette library (match_key(normalize_request(...))) — NOT a Go echo. The offline TestMatchKeyCIAParity pins them so a regression in the Go port fails loudly with no live cia; the env-gated DS_CIA_PARITY=1 manual run re-derives the same keys against the local cia checkout (deferred manual step, never CI). A passing offline test plus a passing manual run together prove byte-for-byte cross-tool match-key parity, so a cassette recorded by either tool replays through the other. method/path are POST /v1/messages for every vector. The three encoder hazards a naive json.Marshal diverges on are deliberately exercised: non-ASCII (ensure_ascii \\uXXXX), the <>& chars (Go HTML-escapes, Python does not), and a multi-turn growing-history body. The widened vectors target CAPTURE-TOOL-DESIGN.md §7's most-likely-subtle-bug surface at zero live-run cost: varied image media_type (note media_type is NOT part of the key — only source.data is hashed, so a media_type change must NOT move the key), multi-image content blocks, and mixed tool_result+text content (including a tool_result whose content is itself a block list). The block-shape vectors (document/PDF source, cache_control marker, thinking, redacted_thinking) close the CAPTURE-TOOL-DESIGN.md §6 Q3 / §7 gap: cia's _content_text routes document/thinking/redacted_thinking through its else-branch (btype + ':' + json.dumps(block, sort_keys=True, default=str) — DEFAULT separators ', '/': ', ensure_ascii, NO HTML escaping), so the entire block is folded into the key; cache_control is a MARKER on a known block and is DROPPED (the text branch keys only block.get('text')), so toggling it must NOT move the key. The document-nonascii-htmlchars vector pins the else-branch encoder against the same ensure_ascii / no-HTML-escape hazards but NESTED inside a sub-encoded block. SYNTHETIC ONLY (D50): fake model id claude-synthetic-test-1, no real model text, no creds, no real paths/costs/tokens/Bearer.",
+  "method": "POST",
+  "path": "/v1/messages",
+  "vectors": [
+    {
+      "name": "simple-ascii",
+      "body": {
+        "model": "claude-synthetic-test-1",
+        "system": "You are a test fixture.",
+        "messages": [
+          { "role": "user", "content": "say hi" }
+        ],
+        "stream": true,
+        "temperature": 0.7,
+        "max_tokens": 100
+      },
+      "key": "claude-synthetic-test-1|turns=1|say hi|fb5f844aa48bc8ab"
+    },
+    {
+      "name": "non-ascii-ensure-ascii",
+      "body": {
+        "model": "claude-synthetic-test-1",
+        "system": "Sÿstem prömpt with ümlauts ☃",
+        "messages": [
+          { "role": "user", "content": "héllo wörld — ☃ snowman" }
+        ]
+      },
+      "key": "claude-synthetic-test-1|turns=1|héllo wörld — ☃ snowman|d5dba1317b9aa3d0"
+    },
+    {
+      "name": "html-chars-no-escape",
+      "body": {
+        "model": "claude-synthetic-test-1",
+        "system": "tags < > & here",
+        "messages": [
+          { "role": "user", "content": "if a < b && c > d then <tag>" }
+        ]
+      },
+      "key": "claude-synthetic-test-1|turns=1|if a < b && c > d then <tag>|fdfa84a6073b6ffb"
+    },
+    {
+      "name": "multiturn-growing-history",
+      "body": {
+        "model": "claude-synthetic-test-1",
+        "system": "You are a test fixture.",
+        "messages": [
+          { "role": "user", "content": "list files" },
+          {
+            "role": "assistant",
+            "content": [
+              { "type": "text", "text": "I'll list them." },
+              { "type": "tool_use", "id": "toolu_VOLATILE_AAA", "name": "ls", "input": { "path": "/x" } }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              { "type": "tool_result", "tool_use_id": "toolu_VOLATILE_AAA", "content": "a.txt\nb.txt" }
+            ]
+          },
+          { "role": "user", "content": "thanks" }
+        ]
+      },
+      "key": "claude-synthetic-test-1|turns=4|thanks|965fc61b0f548dfe"
+    },
+    {
+      "name": "image-source-hash",
+      "body": {
+        "model": "claude-synthetic-test-1",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "SYNTHETICBASE64DATA" } },
+              { "type": "text", "text": "what is this" }
+            ]
+          }
+        ]
+      },
+      "key": "claude-synthetic-test-1|turns=1|image:c05534042c2e7311 text:what is this|48c30a9c0ad91225"
+    },
+    {
+      "name": "image-media-type-jpeg",
+      "body": {
+        "model": "claude-synthetic-test-1",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              { "type": "image", "source": { "type": "base64", "media_type": "image/jpeg", "data": "SYNTHETICJPEGBYTES" } },
+              { "type": "text", "text": "describe this jpeg" }
+            ]
+          }
+        ]
+      },
+      "key": "claude-synthetic-test-1|turns=1|image:d821a1ef09d44aa7 text:describe thi|3b3dbf6134864dcf"
+    },
+    {
+      "name": "image-media-type-webp",
+      "body": {
+        "model": "claude-synthetic-test-1",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              { "type": "image", "source": { "type": "base64", "media_type": "image/webp", "data": "SYNTHETICWEBPBYTES" } },
+              { "type": "text", "text": "describe this webp" }
+            ]
+          }
+        ]
+      },
+      "key": "claude-synthetic-test-1|turns=1|image:5be9c4138be93b54 text:describe thi|f0a9b9b1aaff44ee"
+    },
+    {
+      "name": "multi-image-blocks",
+      "body": {
+        "model": "claude-synthetic-test-1",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "SYNTHETICFIRSTIMAGE" } },
+              { "type": "image", "source": { "type": "base64", "media_type": "image/gif", "data": "SYNTHETICSECONDIMAGE" } },
+              { "type": "text", "text": "compare these two" }
+            ]
+          }
+        ]
+      },
+      "key": "claude-synthetic-test-1|turns=1|image:e52f7af450a4e7e4 image:b1668958808|0453c316e89efcfd"
+    },
+    {
+      "name": "mixed-tool-result-and-text",
+      "body": {
+        "model": "claude-synthetic-test-1",
+        "system": "You are a test fixture.",
+        "messages": [
+          { "role": "user", "content": "run the build" },
+          {
+            "role": "assistant",
+            "content": [
+              { "type": "text", "text": "Running it now." },
+              { "type": "tool_use", "id": "toolu_VOLATILE_BBB", "name": "bash", "input": { "command": "make build" } }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              { "type": "tool_result", "tool_use_id": "toolu_VOLATILE_BBB", "content": "build ok" },
+              { "type": "text", "text": "did it pass?" }
+            ]
+          }
+        ]
+      },
+      "key": "claude-synthetic-test-1|turns=3|tool_result:build ok text:did it pass?|315fc1e0a949e917"
+    },
+    {
+      "name": "tool-result-list-content-and-text",
+      "body": {
+        "model": "claude-synthetic-test-1",
+        "system": "You are a test fixture.",
+        "messages": [
+          { "role": "user", "content": "show me the image output" },
+          {
+            "role": "assistant",
+            "content": [
+              { "type": "tool_use", "id": "toolu_VOLATILE_CCC", "name": "render", "input": { "kind": "chart" } }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "toolu_VOLATILE_CCC",
+                "content": [
+                  { "type": "text", "text": "rendered" },
+                  { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "SYNTHETICTOOLIMAGE" } }
+                ]
+              },
+              { "type": "text", "text": "looks good" }
+            ]
+          }
+        ]
+      },
+      "key": "claude-synthetic-test-1|turns=3|tool_result:text:rendered image:37ad8b58|8c3b655533279f1b"
+    },
+    {
+      "name": "document-pdf-source",
+      "_note": "Anthropic `document` content block with a base64 PDF source. cia has no special case for `document`, so it falls to _content_text's else-branch: `document:` + json.dumps(whole_block, sort_keys=True, default=str) with Python DEFAULT separators (', '/': '). The whole block — source.{type,media_type,data} — is folded into the key (unlike `image`, which hashes only source.data). cia-truth key derived from cia.cassette.match_key(normalize_request(...)).",
+      "body": {
+        "model": "claude-synthetic-test-1",
+        "system": "You are a test fixture.",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              { "type": "document", "source": { "type": "base64", "media_type": "application/pdf", "data": "SYNTHETICPDFBYTES" } },
+              { "type": "text", "text": "summarize this pdf" }
+            ]
+          }
+        ]
+      },
+      "key": "claude-synthetic-test-1|turns=1|document:{\"source\": {\"data\": \"SYNTHETICP|e6bce4d3aae5b738"
+    },
+    {
+      "name": "document-nonascii-htmlchars",
+      "_note": "A `document` block carrying non-ASCII (ÿœö ☃ résumé) and the <>& chars in a title field, to pin the else-branch json.dumps NESTED encoder against the two byte-compat hazards: non-ASCII MUST become \\uXXXX (ensure_ascii) and <>& MUST stay raw (Python does not HTML-escape; Go's default encoder would). This is the document/PDF analogue of the top-level html-chars-no-escape + non-ascii-ensure-ascii vectors, but inside a sub-encoded block. cia-truth key from cia.cassette.",
+      "body": {
+        "model": "claude-synthetic-test-1",
+        "system": "You are a test fixture.",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              { "type": "document", "title": "Rapport ☃ <résumé> & co", "source": { "type": "text", "media_type": "text/plain", "data": "sÿnthetic dœcument bödy" } },
+              { "type": "text", "text": "summarize" }
+            ]
+          }
+        ]
+      },
+      "key": "claude-synthetic-test-1|turns=1|document:{\"source\": {\"data\": \"s\\u00ffnth|6435042744f71166"
+    },
+    {
+      "name": "cache-control-on-text",
+      "_note": "cache_control is a MARKER on a known `text` block. cia's _content_text text-branch keys ONLY block.get('text') — cache_control is dropped — so this keys identically to two plain text blocks (`text:cached preamble` + `text:live question`). Toggling/removing cache_control must NOT move the key; this vector pins that drop. cia-truth key from cia.cassette.",
+      "body": {
+        "model": "claude-synthetic-test-1",
+        "system": "You are a test fixture.",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              { "type": "text", "text": "cached preamble", "cache_control": { "type": "ephemeral" } },
+              { "type": "text", "text": "live question" }
+            ]
+          }
+        ]
+      },
+      "key": "claude-synthetic-test-1|turns=1|text:cached preamble text:live question|abed51ded5f91ad2"
+    },
+    {
+      "name": "cache-control-on-system",
+      "_note": "cache_control marker on a list-form system prompt. system goes through _content_text, so the text-branch again drops cache_control and keys only `text:You are a test fixture.`. Pins that a cached system block keys the same as the uncached one. cia-truth key from cia.cassette.",
+      "body": {
+        "model": "claude-synthetic-test-1",
+        "system": [
+          { "type": "text", "text": "You are a test fixture.", "cache_control": { "type": "ephemeral" } }
+        ],
+        "messages": [
+          { "role": "user", "content": "hello with cached system" }
+        ]
+      },
+      "key": "claude-synthetic-test-1|turns=1|hello with cached system|57feceb332ca3cc5"
+    },
+    {
+      "name": "thinking-block",
+      "_note": "Extended-thinking `thinking` block (thinking text + signature) in an assistant turn. cia has no special case, so the else-branch folds the WHOLE block via `thinking:` + json.dumps(block, sort_keys=True, default=str) (default separators) — both the thinking text and the signature participate in the key. cia-truth key from cia.cassette.",
+      "body": {
+        "model": "claude-synthetic-test-1",
+        "system": "You are a test fixture.",
+        "messages": [
+          { "role": "user", "content": "think hard about this" },
+          {
+            "role": "assistant",
+            "content": [
+              { "type": "thinking", "thinking": "Let me reason step by step about the problem.", "signature": "SYNTHETICTHINKINGSIG" },
+              { "type": "text", "text": "Here is my answer." }
+            ]
+          },
+          { "role": "user", "content": "thanks" }
+        ]
+      },
+      "key": "claude-synthetic-test-1|turns=3|thanks|fef90a37eaf7f492"
+    },
+    {
+      "name": "redacted-thinking-block",
+      "_note": "`redacted_thinking` block (opaque `data` blob) in an assistant turn. Else-branch again: `redacted_thinking:` + json.dumps(block, sort_keys=True, default=str). The opaque data blob participates in the key. cia-truth key from cia.cassette.",
+      "body": {
+        "model": "claude-synthetic-test-1",
+        "system": "You are a test fixture.",
+        "messages": [
+          { "role": "user", "content": "think about the safe topic" },
+          {
+            "role": "assistant",
+            "content": [
+              { "type": "redacted_thinking", "data": "SYNTHETICREDACTEDTHINKINGBLOB" },
+              { "type": "text", "text": "Here is my safe answer." }
+            ]
+          },
+          { "role": "user", "content": "got it" }
+        ]
+      },
+      "key": "claude-synthetic-test-1|turns=3|got it|ccf6de9aedd1a208"
+    }
+  ]
+}

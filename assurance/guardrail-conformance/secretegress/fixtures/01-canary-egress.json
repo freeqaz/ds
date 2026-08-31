@@ -1,0 +1,11 @@
+{
+  "_comment": "Synthetic NEGATIVE CONTROL: the secret-scanning gate is absent/regressed, so the planted canary EGRESSES on an inspected path. A base64-variant canary leaves on an allowed-domain inspected path WITHOUT being blocked. The canary must never egress on inspected paths, so this must FAIL with the named class canary-egressed-on-inspected-path.",
+  "feed": {
+    "canary": "forbidden-deploy-canary",
+    "pushed_variants": ["RAW", "BASE64", "URLENC", "HEX"]
+  },
+  "attempts": [
+    { "dest": "allowed-domain request body (base64)", "path": "inspected", "canary_variant": "BASE64", "blocked": false, "canary_in_spool": false },
+    { "dest": "no-canary plain request",              "path": "inspected", "canary_variant": "",       "blocked": false, "canary_in_spool": false }
+  ]
+}

@@ -1,0 +1,7 @@
+{"seq":1,"session_id":"<session#1>","session_init":{"agent_types":["claude","Explore","general-purpose","Plan","statusline-setup"],"api_key_source":"none","cwd":"/work","mcp_servers":[],"model":"claude-sonnet-4-6","output_style":"default","permission_mode":"bypassPermissions","runtime_version":"2.1.173","tools":["Task","Bash"]},"source":["<src#1>"],"type":"session.init"}
+{"seq":2,"session_id":"<session#1>","session_state":{"reason":"requesting","state":"WORKING"},"source":["<src#2>"],"type":"session.state"}
+{"chat_message":{"blocks":[{"kind":"thinking","text":"The user just said hello. I will answer briefly."}],"message_id":"<msg#1>","role":"assistant"},"seq":3,"session_id":"<session#1>","source":["<src#3>"],"type":"chat.message"}
+{"chat_message":{"blocks":[{"kind":"text","text":"Hello! How can I help you today?"}],"message_id":"<msg#1>","role":"assistant"},"seq":4,"session_id":"<session#1>","source":["<src#4>"],"type":"chat.message"}
+{"quota_updated":{"overage_status":"not_in_overage","rate_limit_type":"five_hour","resets_at":"<present>","semantics":"provisional","status":"allowed"},"seq":5,"session_id":"<session#1>","source":["<src#5>"],"type":"quota.updated"}
+{"seq":6,"session_accounted":{"model_usage":"<present>","num_turns":1,"outcome":"success","terminal_reason":"completed","usage":"<present>"},"session_id":"<session#1>","source":["<src#6>"],"type":"session.accounted"}
+{"seq":7,"session_id":"<session#1>","session_state":{"reason":"turn_complete","state":"ATTACHED"},"source":["<src#6>"],"type":"session.state"}

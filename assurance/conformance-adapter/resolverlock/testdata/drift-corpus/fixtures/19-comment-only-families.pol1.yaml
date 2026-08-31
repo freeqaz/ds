@@ -1,0 +1,22 @@
+# drift class: the `families:` block holds only comments (no live children).
+# named edge shape: comment-only families.
+# expected verdict (go, rust) = (accept, accept)
+# Both readers strip comments before structural interpretation: the Rust parser
+# sees an empty families mapping (no PolicyError — an empty pack is well-formed)
+# and the Go scanner never reads families. The blocklist below is intact, so both
+# accept. This pins that a comment-only section is benign on BOTH sides — a
+# reader that started choking on a comment-only block on only one side is caught.
+# Both-accept quadrant.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+baseline_pack:
+  families:
+    # core: { tier: enabled }
+    # vcs: { tier: enabled }
+    # (all families commented out — intentionally empty)
+blocklist:
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

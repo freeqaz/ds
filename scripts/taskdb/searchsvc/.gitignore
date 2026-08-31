@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+# uv-managed virtualenv + Python bytecode caches are build artifacts, never tracked.
+.venv/
+__pycache__/

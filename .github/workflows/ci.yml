@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ci.yml — the v0 build lanes: the Go workspace (plus the modules deliberately
+# outside it) and the Rust data plane. Deliberately minimal and boring.
+#
+# NOT wired here yet: `make repo-lints`, the guardrail-conformance matrix, and
+# anything needing nested virtualization. Add them once each is green locally.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: go build + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
+
+      # The workspace root is not itself a module, so `go build ./...` from the
+      # repo root does not resolve. Build each go.work member in its own dir.
+      - name: Build and test go.work members
+        run: |
+          set -euo pipefail
+          for dir in $(go list -m -f '{{.Dir}}'); do
+            echo "::group::$dir"
+            (cd "$dir" && go build ./... && go test ./...)
+            echo "::endgroup::"
+          done
+
+      # boundary/ is the executable specification (D26): RED by design, never
+      # built with production code, so it is compile-only — never pass/fail.
+      - name: Build boundary/ (compile-only spec)
+        env:
+          GOWORK: "off"
+        working-directory: boundary
+        run: |
+          go vet ./...
+          go build ./...
+          go test -run '^$' ./...
+
+      - name: Build modules outside the workspace
+        env:
+          GOWORK: "off"
+        run: |
+          set -euo pipefail
+          mods="serpent-tui scripts/taskdb"
+          mods="$mods assurance/e2e assurance/guardrail-conformance"
+          mods="$mods infra/shims/govmomi scripts/nested-testbed/ds-identity-validate-fake"
+          mods="$mods $(find identity -name go.mod -printf '%h\n' | sort)"
+          for dir in $mods; do
+            echo "::group::$dir"
+            (cd "$dir" && go build ./...)
+            echo "::endgroup::"
+          done
+
+  rust:
+    name: rust data plane
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dataplane
+    steps:
+      - uses: actions/checkout@v4
+
+      # dataplane/rust-toolchain.toml pins the toolchain; rustup installs it on
+      # first cargo invocation.
+      - name: Show toolchain
+        run: cargo --version
+
+      - name: Build
+        run: cargo build --workspace --locked

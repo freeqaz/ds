@@ -1,0 +1,8 @@
+{
+  "row": "session-isolation-no-l2-path",
+  "kind": "cross-session-l2-reach",
+  "dst_ip": "203.0.113.10",
+  "peer_session": "session-b",
+  "want": "no-l2-path-between-sessions",
+  "why": "session A cannot reach session B: an L2 reach from one agent VM toward another session's VM is denied because there is no L2 path between agent VMs — a structural / flag-audited proof, never inherited from the inet default-deny ruleset since bridged frames bypass the inet forward chain (doc 06 §3c session isolation; §2 placement + NFT-1, D66)"
+}

@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthetic NEGATIVE CONTROL (b): a credential swap was performed on a pass-through-listed endpoint. This is an explicitly configured (is_default=false) config so the empty-by-default rule does not fire — the violation is that pinned.example.com is on the pass-through list yet had a swap performed on it. A pass-through tunnel is OPAQUE: no inspection, no swap, no scanning (D17/D74). Must FAIL with the named class credential-swap-on-pass-through-endpoint.",
+  "is_default": false,
+  "endpoints": [
+    { "host": "pinned.example.com", "pass_through": true,  "tls_terminated": false, "swap_performed": true },
+    { "host": "github.com",         "pass_through": false, "tls_terminated": true,  "swap_performed": true }
+  ]
+}

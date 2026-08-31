@@ -1,0 +1,48 @@
+# role: security-engineer — review/audit sessions (strawman; doc 18 §5).
+# Guardrail-assurance posture, never offensive vocabulary (doc 06 §3c): dependency
+# audit, code security review, policy review. Deliberately NARROWER than default —
+# locked posture + read-only grants — demonstrating that roles are an envelope
+# mechanism, not a privilege-escalation mechanism (doc 18 §9 point 4).
+schema_version: role/v0
+name: security-engineer
+version: "2026.06.11-v1"
+description: >
+  Security-engineering review role: audit tooling (static analysis, dependency
+  and secret-hygiene scanners), security-review skills, locked network posture,
+  read-only scope. Review and report; never modify or push.
+
+image:
+  layers:
+    - "images:layer/audit-tools@STRAWMAN"   # semgrep/osv-scanner/gitleaks-compatible
+                                            # scanners — analysis tooling only
+
+skills:
+  install:
+    - "skills:security-review@1"  # STRAWMAN refs (doc 18 OQ2)
+    - "skills:dependency-audit@1"
+    - "skills:policy-review@1"
+
+policy:
+  posture: locked                 # NARROWER than the org default — pure narrowing,
+                                  # no ratification needed (doc 18 §9 rule 1)
+  pack_families: {}
+  allowlist: []
+  guardrails:
+    - id: se-no-write-egress      # belt-and-suspenders atop the read-only template:
+      class: rate                 # caps POSTs toward the github service at zero — and
+                                  # only that. Residual write verbs (PUT/PATCH/DELETE)
+                                  # are covered by the read-only scope template below,
+                                  # which is the actual enforcement (doc 16 §5.1); a
+                                  # method-SET match form is flagged to doc 13 as an
+                                  # open need.
+      match: { service: github, method: POST }   # doc 13 §3 reference match shape
+      limit: { count: 0, per: 3600 }
+      rung: block+log             # within the doc 13 rung caps
+
+credentials:
+  scope_template:
+    services: [github]            # read the code under review...
+    mode: read-only               # ...never push, never mutate
+
+runtime:
+  entrypoint_config_overlay_ref: null

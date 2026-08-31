@@ -1,0 +1,21 @@
+# drift class: the same FQDN appears twice in the blocklist.
+# named edge shape: duplicate FQDNs.
+# expected verdict (go, rust) = (accept, accept)
+# Both readers parse a duplicated entry without error: the Go scanner emits two
+# entries (ResolverLockFQDNs de-dups downstream), and the Rust parser stores two
+# BlockEntry rows. Duplication is benign at the PARSE layer on BOTH sides — this
+# fixture pins that agreement, so a future regression that started rejecting a
+# duplicate on only ONE reader (re-introducing skew) is caught here. It is the
+# both-accept twin of the both-reject anchor/alias fixture: the corpus exercises
+# every (go, rust) verdict-pair quadrant, not just the reject ones.
+schema_version: pol1/v0
+layer: system-baseline
+posture: standard
+blocklist:
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+  - domain: dns.example
+    reason: doh-resolver
+    rung: block+log
+passthrough: []

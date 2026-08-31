@@ -1,0 +1,6 @@
+{
+  "_comment": "Synthetic VIOLATION write-leg participant set for the D137 no-inject re-green (sessions/10 §5 claim 4). A ROLE_READER spectator reached the RequestWriterSeat and DriveSession WriterRelayService RPCs — the regression adding the v2 write leg must NOT open: a reader holds no grant and no drive stream, so no WriterRelay surface is reachable by it. The check must report writerseat-reader-cannot-reach-writer-relay (reader-reached-writer-relay-rpc).",
+  "participants": [
+    { "name": "escalating-spectator", "role": "ROLE_READER", "reached_writer_relay_surfaces": ["RequestWriterSeat", "DriveSession"], "input_reached_stdin": false }
+  ]
+}

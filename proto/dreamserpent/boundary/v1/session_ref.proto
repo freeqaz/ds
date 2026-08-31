@@ -1,0 +1,36 @@
+// SessionRef — the SHARED session join quartet (D66/D44), in its own file.
+//
+// CANONICAL DEFINITION for every Stage-0 package: defined once here, imported
+// by the boundary.v1 siblings (log1.proto, ask.proto, suspend.proto) and by
+// the dreamserpent.identity.v1 seams (validate / ca_mint / log_events), never
+// redeclared (doc 14 §2/§4; the freeze-PR session-ref unification). It lives
+// in its own file — rather than log1.proto — so a cross-package importer takes
+// a dependency on exactly this message and nothing else.
+//
+// The orchestrator session record is the AUTHORITY for the index->session-UUID
+// join (doc 14 §4, D66/D44); this message is the wire-carried reference to it.
+// `tap_name` (`dstap-<idx>`, <=15 chars / IFNAMSIZ) is the authoritative,
+// never-recycled join key — simultaneously the NFT-2 `iifname` match, the NFT-5
+// ct-mark key, and the LOG-2 attribution key (doc 14 §4). `host_session_index`
+// is the host-local index the orchestrator allocates and never reuses within the
+// flow-log retention window. NOTE the distinction from FlowRecord's
+// `mark_session_index` (= index mod 2^14): that is a 14-bit disambiguator, never
+// the join key (D76 — see log1.proto FlowRecord).
+//
+// The digest feed's `DigestSessionRef` (identity.v1 digest_feed.proto) is a
+// DELIBERATE thin-local exception: it scopes mint-before-attach ordering only
+// and must not carry attribution machinery (host_id / index / tap_name) the
+// off-host producer cannot know — recorded at the freeze-PR unification.
+
+syntax = "proto3";
+
+package dreamserpent.boundary.v1;
+
+option go_package = "github.com/dream-serpent/dream-serpent/proto/gen/go/dreamserpent/boundary/v1;boundaryv1";
+
+message SessionRef {
+  string session_uuid = 1;
+  string host_id = 2;
+  uint64 host_session_index = 3;
+  string tap_name = 4;
+}

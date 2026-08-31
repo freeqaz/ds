@@ -1,0 +1,8 @@
+::session attached  model=claude-sonnet-4-6  runtime=2.1.173  perm=default  cwd=/work  tools=[Bash]
+$ tool Bash  {"command":"mkdir -p /work/scratch","description":"Create scratch directory"}
+? ASK: approve Bash  {"command":"mkdir -p /work/scratch","description":"Create scratch directory"}  [allow-once / allow-always(PROPOSAL) / deny]
+! ask resolved: ALLOW Bash
+= tool ok: (Bash completed with no output)
+> assistant: Created /work/scratch.
+==session success turns=2 dur=4100ms reason=completed
+[ session 0000000fda00 | success | seq 7 ]

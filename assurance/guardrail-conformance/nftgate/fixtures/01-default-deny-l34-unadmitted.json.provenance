@@ -1,0 +1,1 @@
+{"ds_fixture":{"provenance":"synthetic","seam":"guardrail-conformance/nftgate default-deny-outbound (doc 06 §3c, D4)","created":"2026-06-13","note":"hand-authored L3/4 default-deny case: a connect to a non-allowlisted documentation-range IP (RFC 5737) is dropped by the NFT-1 inet default-drop before the proxy; never a live destination (D50)."}}

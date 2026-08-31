@@ -1,0 +1,92 @@
+[package]
+name = "ds-dnsgate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# The plain-tokio listener shell + the stub policy hook live in the library so the
+# framework-validation harness (tests/) can drive them. main.rs is a thin runner.
+path = "src/lib.rs"
+
+[[bin]]
+name = "ds-dnsgate"
+path = "src/main.rs"
+
+[dependencies]
+# PRE-STAGE deps (DNS-1 framework validation, doc 09 §4 / doc 11 §3.4). The engine
+# is hickory 0.26.x pinned + vendored (D67); tokio is the one pinned workspace major.
+# Default features OFF: this forwarder needs UDP+TCP/53 listening/framing + a plain
+# upstream resolver only — no DNSSEC/DoT/DoH/DoQ/recursor — which holds the vendored
+# and license surface to the minimum.
+#
+# HARD LIMIT (D67): hickory is a LIBRARY here. No hickory type appears in any pub
+# cross-service surface — the policy hook (PolicyHook / StubVerdict) is hickory-free,
+# so the documented raw-tokio fallback stays a library migration.
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "macros", "io-util", "time", "sync"] }
+hickory-server = { workspace = true }
+hickory-resolver = { workspace = true, features = ["tokio"] }
+# hickory's RequestHandler is an #[async_trait] trait, so our impl needs the same
+# macro. Re-export through hickory_server::proto for every other proto/net type to
+# avoid declaring hickory-proto/hickory-net as direct deps (keeps the dep graph and
+# the D67 surface tight).
+async-trait = "0.1"
+# StreamExt::next, to drain the per-connection response sink (BufDnsStreamHandle's
+# StreamReceiver) in the capped TCP accept loop (server.rs). Already in the vendored
+# set as a hickory-net transitive dep — declaring the direct edge adds ZERO vendored
+# crates. Minimal features: StreamExt needs only `std`.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# The shared evaluator (doc 11 §4 / doc 14 §6, POL-3): ds-dnsgate EMBEDS policy-core
+# and asks its PUBLIC consumer surface (`consumer::dns_admission_decision`) for the
+# admission verdict — no rule is reimplemented here. policy-core and its ds-contracts
+# schema dep are family-agnostic and hickory-free, so the D67 corollary holds (the
+# verdict flows in as plain `std`/`String` shapes through the hickory-free policy seam).
+policy-core = { path = "../../crates/policy-core" }
+ds-contracts = { path = "../../crates/ds-contracts" }
+# The host policy snapshot carrier (doc 13 §5 / D72): ds-dnsgate lifts its ONE
+# committed policy (composed-layer material + W2 clamp window + D71 boundary zone)
+# THROUGH `PolicySnapshot::from_policy_layer` / `committed_policy()` instead of
+# re-mirroring parse → compose → lift in this binary — one source of truth for the
+# snapshot lift, in ds-policy-snapshot. The crate is family-agnostic and hickory-free
+# (its only dep is ds-contracts, already in ds-dnsgate's graph), so this path edge adds
+# ZERO new vendored crate and the D67 surface stays tight.
+ds-policy-snapshot = { path = "../../crates/ds-policy-snapshot" }
+# The ONE nft/netlink writer (doc 14 §6, the "nft-writer" row): ds-dnsgate binds the
+# production `ds_nft::NftWriter` as BOTH the txn `NftSetProgrammer` (the W1/W2 set-program
+# → `refresh::refresh_batch` / `backend().apply_batch`, the W2 deadline riding the element
+# timeout) AND the §5.4 `SweepEnforcer` (the allow-set delete-element batch + the
+# `flush_session_report(DstFilter::Only, sever_pair)` conntrack flush). A WORKSPACE-INTERNAL
+# path edge — ds-nft's ONLY dependency is ds-contracts (already in ds-dnsgate's graph), so
+# this adds ZERO new vendored crate (the netlink mechanism is stdlib-only, spawned `nft -f`
+# / `conntrack -D`, doc 11 §4). The production binding is selected ONLY behind
+# `DS_NFTGATE_LIVE` (default OFF → the reportable in-memory `Recording*` impls stay the
+# default; no live kernel write on the offline / CI path).
+ds-nft = { path = "../../crates/ds-nft" }
+# The one LOG-1 emitter (doc 14 §6): the §5.5 DnsEvent surface collapses its
+# convention layer (EventEnvelope / EventSink / Provenance) onto ds-telemetry, and the
+# production ds_telemetry::SpoolSink becomes the gate's real EventSink (via the
+# TelemetrySink adapter; doc 11 §5.5). ds-telemetry is family-agnostic, hickory-free,
+# and already in the workspace (its only deps are ds-contracts + tokio, both already in
+# ds-dnsgate's graph), so this path edge adds ZERO new vendored crate.
+ds-telemetry = { path = "../../crates/ds-telemetry" }
+# The REAL D131 Candidate-A survivable shm admission map (seqlock over a real
+# MAP_SHARED segment), benched in `src/bin/admission_bench.rs` section (5) so the
+# shm lookup numbers are apples-to-apples with the Mutex/RwLock/prototype sections.
+# It sits in [dependencies] (not [dev-dependencies]) because `admission_bench` is a
+# `src/bin/` binary and Cargo only exposes dev-dependencies to tests/examples/benches,
+# NOT to bin targets. ds-admission-shm's only deps are ds-contracts (already in this
+# graph) + libc, so this adds ZERO vendored crate. Production admission wiring still
+# flows through the frozen `ds_contracts::AdmissionMap` trait, not this concrete crate
+# directly — this edge exists for the OQ1/D131 bench harness.
+ds-admission-shm = { path = "../../crates/ds-admission-shm" }
+
+[dev-dependencies]
+# Wire-level fixtures for the framework-validation tests: build/parse DNS messages,
+# assert TC-bit / EDNS / truncation thresholds against measured hickory 0.26.x behavior.
+hickory-proto = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "macros", "io-util", "time", "sync"] }
+# libc: the REAL two-process leg of the DNS-2b shm admission e2e (tests/admission_shm_e2e.rs)
+# forks a child reader to prove cross-process `shm_open` attach-by-name. libc 0.2 is already in
+# the locked set (a ds-admission-shm transitive), so this dev-dep edge adds ZERO vendored crate.
+libc = "0.2"

@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# searchsvc — taskdb's hybrid (dense + sparse) search dispatcher.
+#
+# Core deps are the HERMETIC surface: FastAPI/uvicorn/pydantic for the HTTP
+# dispatcher, numpy for the brute-force vector math, httpx for the TestClient,
+# pytest for the suite. NONE of these download a model or touch the GPU.
+#
+# torch + FlagEmbedding (the live BGE-M3 path) are declared ONLY as the optional
+# [live] extra and are NEVER installed in the hermetic path. The live unit
+# (serve_live.py) imports torch LAZILY behind the DS_EMBED_LIVE gate; serve.py
+# itself must never import torch even transitively (a test asserts this).
+[project]
+name = "taskdb-searchsvc"
+version = "0.1.0"
+description = "taskdb hybrid (dense+sparse) search dispatcher — hermetic skeleton + deterministic fake"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "numpy",
+    "httpx",
+    "pytest",
+]
+
+[project.optional-dependencies]
+# LIVE ONLY — operator-installed behind DS_EMBED_LIVE=1. Never installed in the
+# hermetic fleet path; declaring these here does not pull them into `uv sync`.
+live = [
+    "torch",
+    "FlagEmbedding",
+]
+
+[tool.uv]
+# Keep the lock resolving the hermetic core only; the [live] extra is opt-in.
+default-groups = []

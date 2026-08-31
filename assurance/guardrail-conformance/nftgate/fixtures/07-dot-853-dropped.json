@@ -1,0 +1,8 @@
+{
+  "row": "doh-dot-bypass-fails",
+  "kind": "dns-over-tls-853",
+  "domain": "one.one.one.one",
+  "dst_ip": "1.1.1.1",
+  "want": "drop-dns-over-tls",
+  "why": "DoT bypass: a DNS-over-TLS attempt on tcp/853 from a VM interface is dropped (NFT-4), forcing all resolution through ds-dnsgate"
+}

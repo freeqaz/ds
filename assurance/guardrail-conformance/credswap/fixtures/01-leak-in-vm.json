@@ -1,0 +1,10 @@
+{
+  "_comment": "Synthetic NEGATIVE CONTROL: the swap is absent/regressed, so the swap-class long-lived GitHub PAT appears INSIDE the VM — observed in the process env and in the CoW delta. A swap-class credential must never appear on any in-VM/host surface (the swap happens OUTSIDE the VM at the egress gateway). Must FAIL with the named class swap-class-long-lived-credential-on-surface, naming the surfaces.",
+  "credentials": [
+    {
+      "name": "github-pat",
+      "class": "swap",
+      "long_lived_on_surfaces": ["env", "cow_delta"]
+    }
+  ]
+}

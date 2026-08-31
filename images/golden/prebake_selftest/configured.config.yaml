@@ -1,0 +1,33 @@
+# configured.config.yaml — SYNTHETIC prebake config fixture (D50).
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Drives prebake.sh --self-test: the global switch is ON and one repo
+# (github.com/acme/monorepo) is opted IN (prebake: true), while a second repo
+# (github.com/acme/scratch) is present but opted OUT (prebake: false). The
+# self-test asserts the opted-in repo emits a dry-run PLAN, the opted-out repo
+# and any repo absent from repos[] are skipped/untouched. Invented repo names
+# only — never a real repo (D50: if it is in git, it is synthetic).
+enabled: true
+
+defaults:
+  base_image: /var/lib/ds/golden/m0-base.raw
+  output_dir: /var/lib/ds/golden/prebaked
+  warm_steps:
+    - npm ci
+    - npm run build
+
+repos:
+  - repo: github.com/acme/monorepo
+    prebake: true
+    branches:
+      - main
+      - release
+    warm_steps:
+      - pnpm install --frozen-lockfile
+      - pnpm -r build
+
+  - repo: github.com/acme/scratch
+    prebake: false
+    branches:
+      - main
